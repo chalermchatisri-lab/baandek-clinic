@@ -1,6 +1,9 @@
 BAANDEK ETL — Data Quality Report
 ============================================================
 vaccines: 51 rows
+  ⚠️ VACCINE DOSE COLLAPSE (2) — per-dose data lost by vaccine_id PK:
+     - TETRA (2 doses): differing Recommendation — only dose 1 kept
+     - PCV14 (4 doses): differing CatchUp, Recommendation, Warning — only dose 1 kept
 vaccine_rules: 24 rows
 disease_groups: 25 rows | vaccine_aliases exploded: 104
 age_guide: 17 rows
@@ -9,7 +12,11 @@ phone repair: restored_leading_zero=1078, already_ok=5, flagged_review=10
 appointments: 1107 rows | purpose->vaccine resolved=731, unresolved(kept raw)=376
 clinic_hours: 11 rows
 closures: 5 rows
-clinic_config: merged 12(CLINIC_INFO)+8(BOT_SETTING)+4(LINKS) = 24 keys
+clinic_config: merged 12(CLINIC_INFO)+8(BOT_SETTING)+7(LINKS) = 27 keys
+  ⚠️ CONFIG CONFLICTS PRESERVED (3) — differing values kept under *_SHEET keys:
+     - PHONE: [CLINIC_INFO]='085-065-9715' vs [LINKS]='0850659715' -> kept canonical, added 'PHONE_LINKS'
+     - ADDRESS: [CLINIC_INFO]='41/59 ถนนกาญจนวิถี ต.บางกุ้ง อ.เมือง สุร' vs [LINKS]='41, 59 ถนนกาญจนวิถี ตำบลบางกุ้ง อำเภอเมื' -> kept canonical, added 'ADDRESS_LINKS'
+     - WEBSITE: [BOT_SETTING]='https://bit.ly/baandek-vaccine' vs [LINKS]='https://baandek-clinic.baandek-clinic.wo' -> kept canonical, added 'WEBSITE_LINKS'
 promotions: 4(bot) + 2(banner) = 6
 articles: 8 rows
 faq: 5 rows

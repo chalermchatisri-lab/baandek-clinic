@@ -11,7 +11,8 @@
 5. **Reply fast.** Webhook handlers must ack within LINE's window. Do heavy work after ack; never block the reply.
 6. **One helper, one place.** No `mb`/`vr` prefixed duplicates. Shared utils go in `server/src/lib`.
 7. **Tests separate.** No `testXxx()` functions in production modules. Use Vitest under `*.test.ts`.
-8. **Checkpoint every green step** (see below).
+8. **ETL never drops silently.** `on conflict do nothing` can hide data loss when merging sheets (config keys, vaccine dose rows). Conflicting values MUST be preserved under a suffixed key and logged in `dq_report.txt`. Known collapses: config PHONE/ADDRESS/WEBSITE (→ `*_LINKS`), vaccines TETRA/PCV14 (per-dose Recommendation/Warning — dose 1 kept). Re-check dq_report after every re-seed.
+9. **Checkpoint every green step** (see below).
 
 ## 🧱 Stack
 - **DB:** Supabase (Postgres 15 + RLS + Storage)

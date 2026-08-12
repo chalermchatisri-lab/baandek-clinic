@@ -150,6 +150,25 @@ def main():
             f"{sql_str(r.get('Priority'))},{sql_str(r.get('ProductCode'))}) "
             "on conflict (vaccine_id) do nothing;")
     log(f"vaccines: {len(vac)} rows")
+    # SAFETY: vaccine_id is PK, so multiple dose rows collapse to the first.
+    # Warn if collapsed dose rows differ on fields we actually keep (price/desc/etc).
+    from collections import defaultdict as _dd
+    _by_vid = _dd(list)
+    for r in vac:
+        _by_vid[r.get("VaccineID")].append(r)
+    _dose_warn = []
+    for vid, rows in _by_vid.items():
+        if len(rows) > 1:
+            diffs = [f for f in ("Price", "Description", "CatchUp", "Recommendation", "Warning")
+                     if len({(x.get(f) or "").strip() for x in rows}) > 1]
+            if diffs:
+                _dose_warn.append(f"{vid} ({len(rows)} doses): differing {', '.join(diffs)} — only dose 1 kept")
+    if _dose_warn:
+        log(f"  ⚠️ VACCINE DOSE COLLAPSE ({len(_dose_warn)}) — per-dose data lost by vaccine_id PK:")
+        for w in _dose_warn:
+            log(f"     - {w}")
+    else:
+        log("  ✓ dose collapse safe: no differing price/description across doses")
     # build name->id map for purpose resolution
     name_to_vid = {}
     for r in vac:
@@ -285,20 +304,36 @@ def main():
     emit()
 
     # =========================== CLINIC_CONFIG (merge 3 sheets) =============
+    # SAFETY: if the same key appears in >1 sheet with DIFFERENT values, we must
+    # NOT silently drop one (old bug). We keep the first as the canonical key and
+    # preserve any conflicting value under "{key}_{SHEET}", logging a warning.
     emit("truncate clinic_config cascade;")
-    cfg_seen = set()
+    cfg_values = {}   # key -> (value, sheet)  canonical
+    cfg_conflicts = []
     def emit_config(sheet, cat_default, key_col="Key", val_col="Value", cat_col=None):
         _, rows = clean_sheet(args.db_dir, sheet)
         n = 0
         for r in rows:
             k = (r.get(key_col) or "").strip()
-            if not k or k in cfg_seen:
+            if not k:
                 continue
-            cfg_seen.add(k)
+            v = (r.get(val_col) or r.get("Url") or "").strip()
             cat = (r.get(cat_col) or cat_default) if cat_col else cat_default
+            if k in cfg_values:
+                prev_v, prev_sheet = cfg_values[k]
+                if v and v != prev_v:                       # real conflict -> preserve both
+                    alt_key = f"{k}_{sheet}"
+                    cfg_conflicts.append(f"{k}: [{prev_sheet}]={prev_v[:40]!r} vs [{sheet}]={v[:40]!r} "
+                                         f"-> kept canonical, added '{alt_key}'")
+                    emit("insert into clinic_config (key,value,category,source_sheet) values ("
+                         f"{sql_str(alt_key)},{sql_str(v)},{sql_str(cat)},{sql_str(sheet)}) "
+                         "on conflict (key) do nothing;")
+                    n += 1
+                continue                                    # same value -> skip dup
+            cfg_values[k] = (v, sheet)
             emit("insert into clinic_config (key,value,category,source_sheet) values ("
-                 f"{sql_str(k)},{sql_str(r.get(val_col) or r.get('Url'))},"
-                 f"{sql_str(cat)},{sql_str(sheet)}) on conflict (key) do nothing;")
+                 f"{sql_str(k)},{sql_str(v)},{sql_str(cat)},{sql_str(sheet)}) "
+                 "on conflict (key) do nothing;")
             n += 1
         return n
     n1 = emit_config("CLINIC_INFO", "GENERAL")
@@ -306,6 +341,10 @@ def main():
     n3 = emit_config("LINKS", "CONTACT", key_col="Key", val_col="Url", cat_col="Category")
     log(f"clinic_config: merged {n1}(CLINIC_INFO)+{n2}(BOT_SETTING)+{n3}(LINKS) "
         f"= {n1+n2+n3} keys")
+    if cfg_conflicts:
+        log(f"  ⚠️ CONFIG CONFLICTS PRESERVED ({len(cfg_conflicts)}) — differing values kept under *_SHEET keys:")
+        for c in cfg_conflicts:
+            log(f"     - {c}")
     emit()
 
     # =========================== PROMOTIONS (merge PROMOS + PROMOTIONS) =====
