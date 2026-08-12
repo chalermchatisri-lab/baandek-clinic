@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { env } from "../lib/env";
 import { detectIntent } from "../services/intent";
 import { buildVaccineAdvice } from "../services/vaccine";
+import { getClinicStatus } from "../services/clinicStatus";
+import { buildAppointmentResultByPhone, normalizePhone } from "../services/appointmentCheck";
 
 export const line = new Hono();
 
@@ -28,7 +30,19 @@ async function reply(replyToken: string, messages: unknown[]) {
   });
 }
 
+// A bare phone number = the user answering the "check appointment" prompt.
+function looksLikePhone(text: string): boolean {
+  const d = text.replace(/\D/g, "");
+  return d.length >= 9 && d.length <= 11 && /^[0\s\-()+\d]+$/.test(text.trim());
+}
+
 async function buildReply(text: string): Promise<unknown[]> {
+  // Fast path: a lone phone number -> appointment lookup (no intent needed)
+  if (looksLikePhone(text) && normalizePhone(text)) {
+    const r = await buildAppointmentResultByPhone(text);
+    return [{ type: "text", text: r.text }];
+  }
+
   const r = await detectIntent(text);
   switch (r.intent) {
     case "VACCINE_INFO":
@@ -47,12 +61,17 @@ async function buildReply(text: string): Promise<unknown[]> {
       return [{ type: "text", text: lines.join("\n\n") }];
     }
     case "CLINIC_STATUS":
-    case "CLINIC_TIME":
-      return [{ type: "text", text: "ดูเวลาทำการ/สถานะล่าสุดได้ที่นี่ค่ะ (TODO: clinic status service)" }];
+    case "CLINIC_TIME": {
+      const s = await getClinicStatus();
+      return [{ type: "text", text: s.text }];
+    }
     case "LOCATION":
       return [{ type: "text", text: "แผนที่คลินิกค่ะ (TODO: pull from clinic_config)" }];
     case "APPOINTMENT_CHANGE":
-      return [{ type: "text", text: "เรื่องเลื่อน/เปลี่ยนนัด กรุณาติดต่อเจ้าหน้าที่ค่ะ" }];
+      return [{
+        type: "text",
+        text: "ต้องการตรวจสอบ/เลื่อนนัดใช่ไหมคะ 🗓️\nกรุณาพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) เพื่อดูนัดที่กำลังจะถึงค่ะ",
+      }];
     default:
       return [{ type: "text", text: "สวัสดีค่ะ บ้านเด็กคลินิก พิมพ์ชื่อวัคซีนหรือ 'เวลาทำการ' ได้เลยค่ะ" }];
   }
