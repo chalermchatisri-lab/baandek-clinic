@@ -10,3 +10,4 @@ bun.lockb
 # PII — patient data, never commit
 db/seed*.sql
 vaccine_db/
+*.tsbuildinfo
