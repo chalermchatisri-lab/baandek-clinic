@@ -12,6 +12,7 @@ export interface AdviceCard {
   doses?: number | null;
   interval?: number | null;
   price?: number | null;
+  priceOptions?: { name: string; price: number }[];
   message?: string | null;
   note?: string | null;
 }
@@ -47,6 +48,14 @@ export async function buildVaccineAdvice(
     .eq("status", "ACTIVE");
   const priceByCode = new Map((vax ?? []).map((v) => [v.product_code, v.price]));
   const nameByCode = new Map((vax ?? []).map((v) => [v.product_code, v.name_th]));
+  // Group-level fallback: rules may key on the group (e.g. 'PCV') while the
+  // catalog lists concrete products ('PCV13/15/20'). Offer those as options.
+  const groupProducts = (vax ?? [])
+    .filter((v) => v.price != null)
+    .map((v) => ({ name: v.name_th ?? v.product_code, price: v.price as number }));
+  const groupMinPrice = groupProducts.length
+    ? Math.min(...groupProducts.map((p) => p.price))
+    : null;
 
   const applicable =
     ageMonths == null
@@ -62,7 +71,8 @@ export async function buildVaccineAdvice(
     ageRange: fmtAge(r.min_age_months, r.max_age_months),
     doses: r.primary_doses,
     interval: r.interval_days,
-    price: priceByCode.get(r.product_code) ?? null,
+    price: priceByCode.get(r.product_code) ?? groupMinPrice ?? null,
+    priceOptions: priceByCode.get(r.product_code) == null ? groupProducts : [],
     message: r.display_message,
     note: r.doctor_review,
   }));
