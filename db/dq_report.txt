@@ -1,0 +1,20 @@
+BAANDEK ETL — Data Quality Report
+============================================================
+vaccines: 51 rows
+vaccine_rules: 24 rows
+disease_groups: 25 rows | vaccine_aliases exploded: 104
+age_guide: 17 rows
+patients: 989 unique HN (from 1107 appointment rows -> 118 duplicate person-rows collapsed)
+phone repair: restored_leading_zero=1078, already_ok=5, flagged_review=10
+appointments: 1107 rows | purpose->vaccine resolved=731, unresolved(kept raw)=376
+clinic_hours: 11 rows
+closures: 5 rows
+clinic_config: merged 12(CLINIC_INFO)+8(BOT_SETTING)+4(LINKS) = 24 keys
+promotions: 4(bot) + 2(banner) = 6
+articles: 8 rows
+faq: 5 rows
+packages: 1 rows
+services: 3 rows
+team: 9 rows
+reviews: 1 rows
+vaccine_news: 2 rows

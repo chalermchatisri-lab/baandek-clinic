@@ -1,0 +1,10 @@
+{
+  "name": "baandek-bot",
+  "private": true,
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev:server": "cd server && bun run dev",
+    "dev:web": "cd web && bun run dev",
+    "typecheck": "cd server && bun run typecheck && cd ../web && tsc --noEmit"
+  }
+}
