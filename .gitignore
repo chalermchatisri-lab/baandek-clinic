@@ -8,5 +8,5 @@ bun.lockb
 .vercel
 
 # PII — patient data, never commit
-db/seed.sql
+db/seed*.sql
 vaccine_db/
