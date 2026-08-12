@@ -17,6 +17,22 @@ export interface AdviceCard {
   note?: string | null;
 }
 
+/**
+ * Policy (set by clinic): follow the standard vaccine_rules ONLY.
+ * Anything outside a matching standard rule -> refer to a doctor, never guess.
+ */
+export interface AdviceResult {
+  cards: AdviceCard[];
+  status: "ok" | "no_rule_for_age" | "no_rules" | "needs_doctor";
+}
+
+const DOCTOR_NOTE =
+  "ข้อมูลข้างต้นเป็นแนวทางมาตรฐานค่ะ 🩺\nกรณีนอกเหนือจากนี้ เช่น รับวัคซีนล่าช้า ประวัติไม่ครบ หรือมีข้อสงสัย " +
+  "กรุณาปรึกษาแพทย์ที่คลินิกเพื่อจัดตารางเฉพาะบุคคลค่ะ";
+export const DOCTOR_REFERRAL =
+  "สำหรับกรณีนี้ แนะนำให้ปรึกษาแพทย์ที่บ้านเด็กคลินิกโดยตรงค่ะ 🩺\n" +
+  "แพทย์จะช่วยประเมินและจัดตารางวัคซีนให้เหมาะกับน้องเป็นรายบุคคลค่ะ";
+
 const fmtAge = (min?: number | null, max?: number | null) => {
   const a = (m?: number | null) =>
     m == null ? "" : m < 12 ? `${m} เดือน` : `${Math.floor(m / 12)} ปี${m % 12 ? ` ${m % 12} เดือน` : ""}`;
@@ -29,18 +45,15 @@ const fmtAge = (min?: number | null, max?: number | null) => {
 export async function buildVaccineAdvice(
   vaccineGroup: string,
   ageMonths: number | null,
-): Promise<AdviceCard[]> {
-  // rules for the group, optionally filtered to the queried age
-  let q = admin
+): Promise<AdviceResult> {
+  const { data: rules } = await admin
     .from("vaccine_rules")
     .select("*")
     .eq("vaccine_group", vaccineGroup)
     .eq("status", "ACTIVE")
     .order("sort_order", { ascending: true });
-  const { data: rules } = await q;
-  if (!rules?.length) return [];
+  if (!rules?.length) return { cards: [], status: "no_rules" };
 
-  // price map from vaccines in the same group
   const { data: vax } = await admin
     .from("vaccines")
     .select("product_code, price, name_th")
@@ -48,8 +61,6 @@ export async function buildVaccineAdvice(
     .eq("status", "ACTIVE");
   const priceByCode = new Map((vax ?? []).map((v) => [v.product_code, v.price]));
   const nameByCode = new Map((vax ?? []).map((v) => [v.product_code, v.name_th]));
-  // Group-level fallback: rules may key on the group (e.g. 'PCV') while the
-  // catalog lists concrete products ('PCV13/15/20'). Offer those as options.
   const groupProducts = (vax ?? [])
     .filter((v) => v.price != null)
     .map((v) => ({ name: v.name_th ?? v.product_code, price: v.price as number }));
@@ -57,6 +68,7 @@ export async function buildVaccineAdvice(
     ? Math.min(...groupProducts.map((p) => p.price))
     : null;
 
+  // Age given: STANDARD rules only. No match in range -> refer to doctor (no guessing).
   const applicable =
     ageMonths == null
       ? rules
@@ -66,7 +78,11 @@ export async function buildVaccineAdvice(
             (r.max_age_months == null || ageMonths <= r.max_age_months),
         );
 
-  return (applicable.length ? applicable : rules).map((r) => ({
+  if (ageMonths != null && applicable.length === 0) {
+    return { cards: [], status: "no_rule_for_age" };   // out of standard schedule -> doctor
+  }
+
+  const cards = applicable.map((r) => ({
     title: nameByCode.get(r.product_code) ?? r.product_code ?? vaccineGroup,
     ageRange: fmtAge(r.min_age_months, r.max_age_months),
     doses: r.primary_doses,
@@ -76,4 +92,6 @@ export async function buildVaccineAdvice(
     message: r.display_message,
     note: r.doctor_review,
   }));
+  return { cards, status: "ok" };
 }
+

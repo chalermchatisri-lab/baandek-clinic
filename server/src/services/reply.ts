@@ -1,6 +1,6 @@
 import { admin } from "../lib/supabase";
 import { detectIntent } from "./intent";
-import { buildVaccineAdvice } from "./vaccine";
+import { buildVaccineAdvice, DOCTOR_REFERRAL } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone, normalizePhone } from "./appointmentCheck";
 
@@ -32,16 +32,25 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
     case "VACCINE_AVAILABILITY": {
       if (!r.vaccineGroup)
         return [{ type: "text", text: "ระบุชื่อวัคซีนและอายุได้เลยค่ะ เช่น PCV 2 เดือน" }];
-      const cards = await buildVaccineAdvice(r.vaccineGroup, r.ageMonths ?? null);
-      if (!cards.length)
-        return [{ type: "text", text: "ยังไม่พบข้อมูลสำหรับอายุที่ระบุ กรุณาติดต่อคลินิกค่ะ" }];
-      const lines = cards.map((c) => {
+      const res = await buildVaccineAdvice(r.vaccineGroup, r.ageMonths ?? null);
+      // Standard rules only — anything outside a matching rule -> refer to doctor.
+      if (res.status !== "ok" || res.cards.length === 0) {
+        return [{ type: "text", text: DOCTOR_REFERRAL }];
+      }
+      const lines = res.cards.map((c) => {
         const opts = c.priceOptions?.length
           ? "\n  " + c.priceOptions.map((p) => `${p.name} ${p.price.toLocaleString()} บาท`).join("\n  ")
           : c.price ? ` — ${c.price.toLocaleString()} บาท` : "";
-        return `• ${c.title} (${c.ageRange})` + opts + (c.message ? `\n  ${c.message}` : "");
+        const schedule = c.doses
+          ? `\n  เข็มมาตรฐาน ${c.doses} เข็ม` + (c.interval ? ` (ห่างกัน ${c.interval} วัน)` : "")
+          : "";
+        return `• ${c.title} (${c.ageRange})` + opts + schedule + (c.message ? `\n  ${c.message}` : "");
       });
-      return [{ type: "text", text: lines.join("\n\n") }];
+      return [{
+        type: "text",
+        text: lines.join("\n\n") + "\n\n———\n" +
+          "ข้อมูลนี้เป็นแนวทางมาตรฐานค่ะ 🩺 กรณีรับล่าช้า ประวัติไม่ครบ หรือมีข้อสงสัย กรุณาปรึกษาแพทย์ที่คลินิกค่ะ",
+      }];
     }
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
