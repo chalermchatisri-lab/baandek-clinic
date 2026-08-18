@@ -12,6 +12,9 @@ export type Intent =
   | "SERVICES"
   | "HOLIDAYS"
   | "NEWS"
+  | "PROMOTIONS"
+  | "VACCINE_NEWS"
+  | "CLOSURE_ANNOUNCEMENT"
   | "CONTACT"
   | "BOOKING_MENU"
   | "UNKNOWN";
@@ -36,7 +39,10 @@ const KW = {
   apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด", "เช็คนัด", "ตรวจสอบนัด", "เช็คคิว"],
   services: ["บริการ"],
   holidays: ["วันหยุด", "ปิดยาว", "หยุดยาว", "หยุดคลินิก"],
-  news: ["ข่าวสาร", "ข่าว", "โปรโมชั่น", "โปรโมชัน", "โปรโมท"],
+  news: ["ข่าวสาร", "ข่าว"],
+  promo: ["โปรโมชั่น", "โปรโมชัน", "โปรโมท"],
+  vaccineNew: ["วัคซีนใหม่"],
+  closureAnnounce: ["ประกาศปิดคลินิก"],
   contact: ["ติดต่อ", "เบอร์โทร", "เบอร์", "โทรศัพท์", "ไลน์ไอดี"],
   booking: ["จองคิว", "จอง", "นัดคิว"],
 };
@@ -73,6 +79,9 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.time))       return { intent: "CLINIC_TIME", text };
   if (has(text, KW.location))   return { intent: "LOCATION", text };
   if (has(text, KW.services))   return { intent: "SERVICES", text };
+  if (has(text, KW.closureAnnounce)) return { intent: "CLOSURE_ANNOUNCEMENT", text };
+  if (has(text, KW.vaccineNew))      return { intent: "VACCINE_NEWS", text };
+  if (has(text, KW.promo))           return { intent: "PROMOTIONS", text };
   if (has(text, KW.holidays))   return { intent: "HOLIDAYS", text };
   if (has(text, KW.news))       return { intent: "NEWS", text };
   if (has(text, KW.contact))    return { intent: "CONTACT", text };

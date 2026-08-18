@@ -39,7 +39,14 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
     case "VACCINE_PRICE":
     case "VACCINE_AVAILABILITY": {
       if (!r.vaccineGroup)
-        return [{ type: "text", text: "ระบุชื่อวัคซีนและอายุได้เลยค่ะ เช่น PCV 2 เดือน" }];
+        return [{
+          type: "text",
+          text: "💉 ตรวจสอบราคาวัคซีน\n\n" +
+            "ราคาวัคซีนขึ้นอยู่กับชนิด ยี่ห้อ จำนวนเข็ม และช่วงอายุของเด็กค่ะ\n\n" +
+            "สามารถตรวจสอบรายการและราคาเบื้องต้นได้ที่\n" +
+            "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor\n\n" +
+            "กรุณายืนยันราคาและสต็อกกับเจ้าหน้าที่อีกครั้งก่อนรับบริการค่ะ",
+        }];
       const res = await buildVaccineAdvice(r.vaccineGroup, r.ageMonths ?? null);
       // Standard rules only — anything outside a matching rule -> refer to doctor.
       if (res.status !== "ok" || res.cards.length === 0) {
@@ -81,55 +88,89 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
         text: "ต้องการตรวจสอบ/เลื่อนนัดใช่ไหมคะ 🗓️\nกรุณาพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) เพื่อดูนัดที่กำลังจะถึงค่ะ",
       }];
     case "SERVICES": {
-      const { data } = await admin
-        .from("services").select("title, description, icon")
-        .eq("active", true).order("display_order");
-      if (!data || data.length === 0)
-        return [{ type: "text", text: "ขออภัยค่ะ ยังไม่มีข้อมูลบริการในระบบ" }];
-      const lines = data.map((s) =>
-        `${s.icon ?? "•"} ${s.title}` + (s.description ? `\n   ${s.description}` : ""));
-      return [{ type: "text", text: "🏥 บริการของบ้านเด็กคลินิก\n\n" + lines.join("\n\n") }];
+      const phone = await config("PHONE");
+      return [{
+        type: "text",
+        text: "🏥 บริการของเรา\n\n" +
+          "🩺 คลินิกตรวจโรคทั่วไป\n" +
+          "ราคา 300–1,000+ บาท (ขึ้นกับค่ายาและเวชภัณฑ์)\n" +
+          "(รวมกลุ่มอาการป่วยทั่วไปและอาการปวดศีรษะ)\n\n" +
+          "👶 คลินิกสุขภาพเด็กดี\n" +
+          "รวมคำแนะนำด้านพัฒนาการและการเลี้ยงดูเด็ก\n\n" +
+          "กรุณาสอบถามราคาและรายละเอียดเพิ่มเติมกับเจ้าหน้าที่ก่อนเข้ารับบริการค่ะ" +
+          (phone ? `\n☎️ ${phone}` : ""),
+      }];
     }
-    case "HOLIDAYS": {
+    case "HOLIDAYS":
+    case "CLOSURE_ANNOUNCEMENT": {
       const today = new Date().toISOString().slice(0, 10);
-      const { data } = await admin
-        .from("closures").select("start_date, end_date, reason")
-        .eq("active", true).gte("end_date", today).order("start_date").limit(10);
-      if (!data || data.length === 0)
-        return [{ type: "text", text: "ช่วงนี้คลินิกไม่มีวันหยุดพิเศษค่ะ 😊 เปิดตามเวลาปกติ" }];
-      const lines = data.map((c) => {
-        const range = c.start_date === c.end_date
-          ? thaiDate(c.start_date)
-          : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
-        return `🗓️ ${range}` + (c.reason ? ` — ${c.reason}` : "");
-      });
-      return [{ type: "text", text: "📅 วันหยุด/ปิดพิเศษ\n\n" + lines.join("\n") + "\n\nกรุณาวางแผนก่อนเข้ารับบริการนะคะ" }];
+      const [{ data: closures }, { data: hours }] = await Promise.all([
+        admin.from("closures").select("start_date, end_date, reason, message, closure_type")
+          .eq("active", true).gte("end_date", today).order("start_date").limit(10),
+        admin.from("clinic_hours").select("day").eq("status", "CLOSED"),
+      ]);
+      const TH_DAY: Record<string, string> = {
+        Monday: "วันจันทร์", Tuesday: "วันอังคาร", Wednesday: "วันพุธ",
+        Thursday: "วันพฤหัสบดี", Friday: "วันศุกร์", Saturday: "วันเสาร์", Sunday: "วันอาทิตย์",
+      };
+      const parts = ["📅 วันหยุดของคลินิกบ้านเด็ก"];
+      const closedDays = [...new Set((hours ?? []).map((h) => h.day))];
+      if (closedDays.length > 0)
+        parts.push(closedDays.map((d) => `🔴 ปิดทุก${TH_DAY[d] ?? d}เป็นประจำ`).join("\n"));
+      if (closures && closures.length > 0) {
+        const lines = closures.map((c) => {
+          const range = c.start_date === c.end_date
+            ? thaiDate(c.start_date)
+            : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
+          return `🗓️ ${range}\n${c.message ?? c.reason ?? ""}`;
+        });
+        parts.push("เดือนนี้มีวันหยุดต่อเนื่อง\n\n" + lines.join("\n\n"));
+      }
+      parts.push("กรุณาวางแผนก่อนเข้ารับบริการนะคะ");
+      return [{ type: "text", text: parts.join("\n\n") }];
     }
     case "NEWS": {
-      const [{ data: promos }, { data: news }] = await Promise.all([
-        admin.from("promotions").select("title, description, discount, condition").eq("active", true),
-        admin.from("vaccine_news").select("vaccine_name, description").eq("status", true),
-      ]);
-      const parts: string[] = [];
-      for (const p of promos ?? [])
-        parts.push(`🎁 ${p.title}` + (p.discount ? ` — ${p.discount}` : "") +
-          (p.description ? `\n   ${p.description}` : "") + (p.condition ? `\n   เงื่อนไข: ${p.condition}` : ""));
-      for (const n of news ?? [])
-        parts.push(`📰 ${n.vaccine_name}` + (n.description ? `\n   ${n.description}` : ""));
-      if (parts.length === 0)
-        return [{ type: "text", text: "ช่วงนี้ยังไม่มีโปรโมชันหรือข่าวสารใหม่ค่ะ 😊" }];
-      return [{ type: "text", text: "📢 โปรโมชัน & ข่าวสาร\n\n" + parts.join("\n\n") }];
+      const items = [
+        { type: "action", action: { type: "message", label: "โปรโมชั่น", text: "โปรโมชั่น" } },
+        { type: "action", action: { type: "message", label: "วัคซีนใหม่", text: "วัคซีนใหม่" } },
+        { type: "action", action: { type: "message", label: "ประกาศปิดคลินิก", text: "ประกาศปิดคลินิก" } },
+      ];
+      return [{ type: "text", text: "สนใจข้อมูลเรื่องไหนดีคะ เลือกได้เลยค่ะ 👇", quickReply: { items } }];
+    }
+    case "PROMOTIONS": {
+      const { data } = await admin
+        .from("promotions").select("title, vaccine_group, discount, condition").eq("active", true);
+      if (!data || data.length === 0)
+        return [{ type: "text", text: "ช่วงนี้ยังไม่มีโปรโมชันค่ะ 😊" }];
+      const lines = data.map((p) =>
+        `✅ ${p.title}\n` +
+        (p.vaccine_group ? `กลุ่มวัคซีน: ${p.vaccine_group}\n` : "") +
+        (p.discount ? `ส่วนลด: ${p.discount}\n` : "") +
+        (p.condition ? `เงื่อนไข: ${p.condition}` : ""));
+      return [{
+        type: "text",
+        text: "🎉 โปรโมชั่นปัจจุบัน\n\n" + lines.join("\n\n") +
+          "\n\nหมายเหตุ: โปรโมชั่นอาจมีการเปลี่ยนแปลง กรุณาสอบถามแอดมินอีกครั้งค่ะ",
+      }];
+    }
+    case "VACCINE_NEWS": {
+      const { data } = await admin
+        .from("vaccine_news").select("vaccine_name, description").eq("status", true);
+      if (!data || data.length === 0)
+        return [{ type: "text", text: "ไม่มีวัคซีนใหม่ช่วงนี้ค่ะ" }];
+      const lines = data.map((n) => `📰 ${n.vaccine_name}` + (n.description ? `\n${n.description}` : ""));
+      return [{ type: "text", text: "💉 วัคซีนใหม่\n\n" + lines.join("\n\n") }];
     }
     case "CONTACT": {
-      const [phone, addr, maps, lineId, web] = await Promise.all([
-        config("PHONE"), config("ADDRESS"), config("GOOGLE_MAPS"), config("LINE_ID"), config("WEBSITE"),
+      const [phone, fbPage, lineOa] = await Promise.all([
+        config("PHONE"), config("FACEBOOK_PAGE"), config("LINE_OA_ID"),
       ]);
-      const lines = ["📞 ติดต่อบ้านเด็กคลินิก", ""];
-      if (phone) lines.push(`โทร: ${phone}`);
-      if (lineId) lines.push(`LINE: ${lineId}`);
-      if (addr) lines.push(`ที่อยู่: ${addr}`);
-      if (maps) lines.push(`แผนที่: ${maps}`);
-      if (web) lines.push(`เว็บไซต์: ${web}`);
+      const lines = ["📞 ติดต่อพนักงาน", ""];
+      if (phone) lines.push(`☎️ โทร: ${phone}`);
+      if (fbPage) lines.push(`💬 Messenger: https://m.me/${fbPage}`);
+      if (fbPage) lines.push(`👍 Facebook: https://www.facebook.com/${fbPage}`);
+      if (lineOa) lines.push(`🟢 LINE: ${lineOa}`);
+      lines.push("", "ยินดีให้บริการในเวลาทำการค่ะ");
       return [{ type: "text", text: lines.join("\n") }];
     }
     case "BOOKING_MENU": {
