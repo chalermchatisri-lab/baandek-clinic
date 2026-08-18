@@ -13,7 +13,6 @@ export type Intent =
   | "HOLIDAYS"
   | "NEWS"
   | "PROMOTIONS"
-  | "VACCINE_NEWS"
   | "CLOSURE_ANNOUNCEMENT"
   | "CONTACT"
   | "BOOKING_MENU"
@@ -80,7 +79,7 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.location))   return { intent: "LOCATION", text };
   if (has(text, KW.services))   return { intent: "SERVICES", text };
   if (has(text, KW.closureAnnounce)) return { intent: "CLOSURE_ANNOUNCEMENT", text };
-  if (has(text, KW.vaccineNew))      return { intent: "VACCINE_NEWS", text };
+  if (has(text, KW.vaccineNew))      return { intent: "PROMOTIONS", text };
   if (has(text, KW.promo))           return { intent: "PROMOTIONS", text };
   if (has(text, KW.holidays))   return { intent: "HOLIDAYS", text };
   if (has(text, KW.news))       return { intent: "NEWS", text };
