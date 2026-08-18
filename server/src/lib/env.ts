@@ -8,6 +8,7 @@ export const env = {
   supabaseServiceKey: req("SUPABASE_SERVICE_ROLE_KEY"),
   lineToken: process.env.LINE_CHANNEL_ACCESS_TOKEN ?? "",
   lineSecret: process.env.LINE_CHANNEL_SECRET ?? "",
+  liffId: process.env.LIFF_ID ?? "",
   fbPageToken: process.env.FB_PAGE_ACCESS_TOKEN ?? "",
   fbVerifyToken: process.env.FB_VERIFY_TOKEN ?? "",
   geminiKey: process.env.GEMINI_API_KEY ?? "",
