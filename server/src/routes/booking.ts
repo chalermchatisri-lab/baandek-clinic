@@ -104,7 +104,10 @@ booking.get("/liff/book", (c) => {
   .dates-wrap { position:relative; }
   .dates { display:flex; flex-direction:column; gap:8px; padding:4px; max-height:264px; overflow-y:auto; border:1px solid #e0f0ec; border-radius:10px; background:#fafffe; }
   .dates-wrap.faded::after { content:""; position:absolute; left:1px; right:1px; bottom:1px; height:36px; border-radius:0 0 10px 10px; background:linear-gradient(to bottom, rgba(250,255,254,0), rgba(240,250,247,0.95)); pointer-events:none; }
-  .scroll-hint { font-size:12px; color:#0f766e; margin:2px 0 6px; opacity:.85; }
+  .scroll-hint { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:700; color:#0f766e; background:#d1faf1; border:1px solid #5eead4; border-radius:999px; padding:5px 12px; margin:2px 0 8px; }
+  .scroll-hint .arrow { display:inline-block; animation:bob 1s ease-in-out infinite; }
+  @keyframes bob { 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(3px); } }
+  @media (prefers-reduced-motion: reduce){ .scroll-hint .arrow{ animation:none; } }
   .date-btn, .time-btn { padding:10px 14px; border-radius:8px; border:1px solid #14b8a6; background:#fff; color:#0f766e; white-space:nowrap; cursor:pointer; font-size:15px; }
   .date-btn { width:100%; text-align:center; font-weight:600; }
   .date-btn.active, .time-btn.active { background:#14b8a6; color:#fff; }
@@ -118,7 +121,7 @@ booking.get("/liff/book", (c) => {
   <h1>🦕 จองคิว บ้านเด็กคลินิก</h1>
   <div class="card">
     <label>เลือกวันที่</label>
-    <div class="scroll-hint" id="scrollHint">↓ เลื่อนดูวันที่เพิ่มเติม</div>
+    <div class="scroll-hint" id="scrollHint"><span class="arrow">↓</span> เลื่อนดูวันที่เพิ่มเติม</div>
     <div class="dates-wrap"><div class="dates" id="dates">กำลังโหลด...</div></div>
     <label>เลือกเวลา</label>
     <div class="times" id="times"></div>
@@ -172,7 +175,7 @@ function updateScrollHint() {
   const canScroll = box.scrollHeight > box.clientHeight + 4;
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
   const show = canScroll && !atBottom;
-  if (hint) hint.style.display = show ? 'block' : 'none';
+  if (hint) hint.style.display = show ? 'inline-flex' : 'none';
   if (wrap) wrap.classList.toggle('faded', show);
 }
 document.getElementById('dates').addEventListener('scroll', updateScrollHint);
