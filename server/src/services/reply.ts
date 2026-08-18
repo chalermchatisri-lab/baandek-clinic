@@ -137,28 +137,18 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
       return [{ type: "text", text: "สนใจข้อมูลเรื่องไหนดีคะ เลือกได้เลยค่ะ 👇", quickReply: { items } }];
     }
     case "PROMOTIONS": {
-      const [{ data: promos }, { data: news }] = await Promise.all([
-        admin.from("promotions").select("title, vaccine_group, discount, condition").eq("active", true),
-        admin.from("vaccine_news").select("vaccine_name, description").eq("status", true),
-      ]);
-      const parts: string[] = [];
-      if (promos && promos.length > 0) {
-        const lines = promos.map((p) =>
-          `✅ ${p.title}\n` +
-          (p.vaccine_group ? `กลุ่มวัคซีน: ${p.vaccine_group}\n` : "") +
-          (p.discount ? `ส่วนลด: ${p.discount}\n` : "") +
-          (p.condition ? `เงื่อนไข: ${p.condition}` : ""));
-        parts.push("🎉 โปรโมชั่นปัจจุบัน\n\n" + lines.join("\n\n"));
-      }
-      if (news && news.length > 0) {
-        const lines = news.map((n) => `📰 ${n.vaccine_name}\n${n.description ?? ""}`);
-        parts.push("📰 วัคซีนใหม่\n\n" + lines.join("\n\n"));
-      }
-      if (parts.length === 0)
-        return [{ type: "text", text: "ช่วงนี้ยังไม่มีโปรโมชันหรือข่าวสารใหม่ค่ะ 😊" }];
+      const { data: promos } = await admin
+        .from("promotions").select("title, vaccine_group, discount, condition").eq("active", true);
+      if (!promos || promos.length === 0)
+        return [{ type: "text", text: "ช่วงนี้ยังไม่มีโปรโมชันค่ะ 😊" }];
+      const lines = promos.map((p) =>
+        `✅ ${p.title}\n` +
+        (p.vaccine_group ? `กลุ่มวัคซีน: ${p.vaccine_group}\n` : "") +
+        (p.discount ? `ส่วนลด: ${p.discount}\n` : "") +
+        (p.condition ? `เงื่อนไข: ${p.condition}` : ""));
       return [{
         type: "text",
-        text: parts.join("\n\n———\n\n") +
+        text: "🎉 โปรโมชั่นปัจจุบัน\n\n" + lines.join("\n\n") +
           "\n\nหมายเหตุ: โปรโมชั่นอาจมีการเปลี่ยนแปลง กรุณาสอบถามแอดมินอีกครั้งค่ะ",
       }];
     }
