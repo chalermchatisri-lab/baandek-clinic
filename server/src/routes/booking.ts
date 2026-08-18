@@ -101,8 +101,9 @@ booking.get("/liff/book", (c) => {
   .card { background:#fff; border-radius:12px; padding:16px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
   label { display:block; font-size:14px; margin:10px 0 4px; font-weight:600; }
   input, select { width:100%; padding:10px; border:1px solid #ccc; border-radius:8px; font-size:16px; box-sizing:border-box; }
-  .dates { display:flex; gap:8px; overflow-x:auto; padding:4px 0; }
-  .date-btn, .time-btn { padding:10px 14px; border-radius:8px; border:1px solid #14b8a6; background:#fff; color:#0f766e; white-space:nowrap; cursor:pointer; }
+  .dates { display:flex; flex-direction:column; gap:8px; padding:4px 0; }
+  .date-btn, .time-btn { padding:10px 14px; border-radius:8px; border:1px solid #14b8a6; background:#fff; color:#0f766e; white-space:nowrap; cursor:pointer; font-size:15px; }
+  .date-btn { width:100%; text-align:center; font-weight:600; }
   .date-btn.active, .time-btn.active { background:#14b8a6; color:#fff; }
   .times { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
   button.submit { width:100%; padding:14px; background:#0f766e; color:#fff; border:none; border-radius:10px; font-size:16px; margin-top:16px; }
@@ -136,6 +137,14 @@ let slotsData = [];
 let selectedDate = null;
 let selectedTime = null;
 
+// วันที่ไทยแบบสั้น: "2026-08-22" -> "เสาร์ 22 ส.ค. 2569"
+const TH_DAYS = ['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'];
+const TH_MON = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+function thaiDateShort(ymd) {
+  const d = new Date(ymd + 'T00:00:00');
+  return TH_DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + TH_MON[d.getMonth()] + ' ' + (d.getFullYear() + 543);
+}
+
 function renderDates() {
   const el = document.getElementById('dates');
   if (slotsData.length === 0) { el.textContent = 'ไม่มีวันว่างในช่วงนี้ค่ะ'; return; }
@@ -143,7 +152,7 @@ function renderDates() {
   slotsData.forEach(d => {
     const btn = document.createElement('button');
     btn.className = 'date-btn';
-    btn.textContent = d.date;
+    btn.textContent = thaiDateShort(d.date);
     btn.onclick = () => { selectedDate = d.date; selectedTime = null; renderDates(); renderTimes(); updateSubmit(); };
     if (d.date === selectedDate) btn.classList.add('active');
     el.appendChild(btn);
