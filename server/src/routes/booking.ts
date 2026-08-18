@@ -101,7 +101,7 @@ booking.get("/liff/book", (c) => {
   .card { background:#fff; border-radius:12px; padding:16px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
   label { display:block; font-size:14px; margin:10px 0 4px; font-weight:600; }
   input, select { width:100%; padding:10px; border:1px solid #ccc; border-radius:8px; font-size:16px; box-sizing:border-box; }
-  .dates { display:flex; flex-direction:column; gap:8px; padding:4px 0; }
+  .dates { display:flex; flex-direction:column; gap:8px; padding:4px; max-height:264px; overflow-y:auto; border:1px solid #e0f0ec; border-radius:10px; background:#fafffe; }
   .date-btn, .time-btn { padding:10px 14px; border-radius:8px; border:1px solid #14b8a6; background:#fff; color:#0f766e; white-space:nowrap; cursor:pointer; font-size:15px; }
   .date-btn { width:100%; text-align:center; font-weight:600; }
   .date-btn.active, .time-btn.active { background:#14b8a6; color:#fff; }
