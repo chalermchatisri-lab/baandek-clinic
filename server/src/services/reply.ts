@@ -167,9 +167,15 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
     case "NEWS": {
       const items = [
         { type: "action", action: { type: "message", label: "โปรโมชั่น", text: "โปรโมชั่น" } },
+        { type: "action", action: { type: "message", label: "วัคซีนใหม่", text: "วัคซีนใหม่" } },
         { type: "action", action: { type: "message", label: "ประกาศปิดคลินิก", text: "ประกาศปิดคลินิก" } },
       ];
       return [{ type: "text", text: "สนใจข้อมูลเรื่องไหนดีคะ เลือกได้เลยค่ะ 👇", quickReply: { items } }];
+    }
+    case "VACCINE_NEWS": {
+      const [footer, version] = await Promise.all([config("FOOTER"), config("VERSION")]);
+      const tail = [footer, version].filter(Boolean).join("\n");
+      return [{ type: "text", text: "ไม่มีวัคซีนใหม่ช่วงนี้ค่ะ" + (tail ? `\n\n${tail}` : "") }];
     }
     case "PROMOTIONS": {
       const { data: promos } = await admin
