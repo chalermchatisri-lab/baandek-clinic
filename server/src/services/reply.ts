@@ -26,6 +26,40 @@ function looksLikePhone(text: string): boolean {
   return d.length >= 9 && d.length <= 11 && /^[0\s\-()+\d]+$/.test(text.trim());
 }
 
+const TH_DAY: Record<string, string> = {
+  Monday: "วันจันทร์", Tuesday: "วันอังคาร", Wednesday: "วันพุธ",
+  Thursday: "วันพฤหัสบดี", Friday: "วันศุกร์", Saturday: "วันเสาร์", Sunday: "วันอาทิตย์",
+};
+
+/** "เดือนนี้มีวันหยุดต่อเนื่อง ..." block only (no recurring-weekday line). */
+async function closuresListText(): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: closures } = await admin
+    .from("closures").select("start_date, end_date, reason, message, closure_type")
+    .eq("active", true).gte("end_date", today).order("start_date").limit(10);
+  if (!closures || closures.length === 0) return "";
+  const lines = closures.map((c) => {
+    const range = c.start_date === c.end_date
+      ? thaiDate(c.start_date)
+      : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
+    return `🗓️ ${range}\n${c.message ?? c.reason ?? ""}`;
+  });
+  return "เดือนนี้มีวันหยุดต่อเนื่อง\n\n" + lines.join("\n\n");
+}
+
+/** Recurring weekly-closed line(s), e.g. "🔴 ปิดทุกวันจันทร์เป็นประจำ". */
+async function weeklyClosedText(): Promise<string> {
+  const { data: hours } = await admin.from("clinic_hours").select("day").eq("status", "CLOSED");
+  const closedDays = [...new Set((hours ?? []).map((h) => h.day))];
+  return closedDays.map((d) => `🔴 ปิดทุก${TH_DAY[d] ?? d}เป็นประจำ`).join("\n");
+}
+
+/** Full holidays summary — recurring line + upcoming closures, used by HOLIDAYS/CLOSURE_ANNOUNCEMENT. */
+async function closuresSummaryText(): Promise<string> {
+  const [weekly, list] = await Promise.all([weeklyClosedText(), closuresListText()]);
+  return [weekly, list].filter(Boolean).join("\n\n");
+}
+
 export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
   // Fast path: a lone phone number = user answering the appointment prompt.
   if (looksLikePhone(text) && normalizePhone(text)) {
@@ -69,17 +103,37 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
     }
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
-      const s = await getClinicStatus();
-      return [{ type: "text", text: s.text }];
+      const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
+      const ymdOf = (d: Date) => d.toISOString().slice(0, 10);
+      const today = await getClinicStatus(ymdOf(now));
+      const parts: string[] = [(today.isOpen ? "🟢 " : "🔴 ") + `วันนี้ ${today.text}`];
+
+      if (!today.isOpen) {
+        for (let i = 1; i <= 14; i++) {
+          const d = new Date(now.getTime() + i * 86400000);
+          const st = await getClinicStatus(ymdOf(d));
+          if (st.isOpen) {
+            const dateLine = st.text.split("\n")[0]?.replace(/ คลินิกเปิดค่ะ.*/, "") ?? "";
+            parts.push(`🟢 เปิดทำการอีกครั้ง ${dateLine}`);
+            break;
+          }
+        }
+      }
+
+      const tomorrow = await getClinicStatus(ymdOf(new Date(now.getTime() + 86400000)));
+      parts.push((tomorrow.isOpen ? "🟢 " : "🔴 ") + `พรุ่งนี้ ${tomorrow.text}`);
+
+      const summary = await closuresListText();
+      if (summary) parts.push(summary);
+
+      return [{ type: "text", text: parts.join("\n\n") }];
     }
     case "LOCATION": {
-      const [maps, addr, phone] = await Promise.all([
-        config("GOOGLE_MAPS"), config("ADDRESS"), config("PHONE"),
-      ]);
+      const [maps, addr] = await Promise.all([config("GOOGLE_MAPS"), config("ADDRESS")]);
       return [{
         type: "text",
-        text: `📍 บ้านเด็กคลินิก\n${addr ?? ""}` +
-              (maps ? `\n🗺️ ${maps}` : "") + (phone ? `\n📞 ${phone}` : ""),
+        text: `📍 คลินิกบ้านเด็ก\n\n${addr ?? ""}` +
+              (maps ? `\n\nเปิดเส้นทางใน Google Maps:\n${maps}` : ""),
       }];
     }
     case "APPOINTMENT_CHANGE":
@@ -103,31 +157,12 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
     }
     case "HOLIDAYS":
     case "CLOSURE_ANNOUNCEMENT": {
-      const today = new Date().toISOString().slice(0, 10);
-      const [{ data: closures }, { data: hours }] = await Promise.all([
-        admin.from("closures").select("start_date, end_date, reason, message, closure_type")
-          .eq("active", true).gte("end_date", today).order("start_date").limit(10),
-        admin.from("clinic_hours").select("day").eq("status", "CLOSED"),
-      ]);
-      const TH_DAY: Record<string, string> = {
-        Monday: "วันจันทร์", Tuesday: "วันอังคาร", Wednesday: "วันพุธ",
-        Thursday: "วันพฤหัสบดี", Friday: "วันศุกร์", Saturday: "วันเสาร์", Sunday: "วันอาทิตย์",
-      };
-      const parts = ["📅 วันหยุดของคลินิกบ้านเด็ก"];
-      const closedDays = [...new Set((hours ?? []).map((h) => h.day))];
-      if (closedDays.length > 0)
-        parts.push(closedDays.map((d) => `🔴 ปิดทุก${TH_DAY[d] ?? d}เป็นประจำ`).join("\n"));
-      if (closures && closures.length > 0) {
-        const lines = closures.map((c) => {
-          const range = c.start_date === c.end_date
-            ? thaiDate(c.start_date)
-            : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
-          return `🗓️ ${range}\n${c.message ?? c.reason ?? ""}`;
-        });
-        parts.push("เดือนนี้มีวันหยุดต่อเนื่อง\n\n" + lines.join("\n\n"));
-      }
-      parts.push("กรุณาวางแผนก่อนเข้ารับบริการนะคะ");
-      return [{ type: "text", text: parts.join("\n\n") }];
+      const summary = await closuresSummaryText();
+      const body = summary || "ช่วงนี้คลินิกไม่มีวันหยุดพิเศษค่ะ 😊 เปิดตามเวลาปกติ";
+      return [{
+        type: "text",
+        text: "📅 วันหยุดของคลินิกบ้านเด็ก\n\n" + body + "\n\nกรุณาวางแผนก่อนเข้ารับบริการนะคะ",
+      }];
     }
     case "NEWS": {
       const items = [
