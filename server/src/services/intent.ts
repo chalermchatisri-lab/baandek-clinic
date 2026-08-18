@@ -9,6 +9,11 @@ export type Intent =
   | "VACCINE_PRICE"
   | "VACCINE_AVAILABILITY"
   | "VACCINE_INFO"
+  | "SERVICES"
+  | "HOLIDAYS"
+  | "NEWS"
+  | "CONTACT"
+  | "BOOKING_MENU"
   | "UNKNOWN";
 
 export interface IntentResult {
@@ -25,10 +30,15 @@ const has = (t: string, kws: string[]) => kws.some((k) => t.includes(k));
 const KW = {
   price: ["ราคา", "เท่าไร", "เท่าไหร่", "กี่บาท", "ค่าฉีด", "ค่าใช้จ่าย"],
   avail: ["มีไหม", "มีมั้ย", "มีรึเปล่า", "มีหรือเปล่า", "มีวัคซีน", "มีสต็อก"],
-  status: ["เปิดไหม", "ปิดไหม", "หยุดไหม", "วันนี้เปิด", "ยังเปิด", "ไปทัน"],
+  status: ["เปิดไหม", "ปิดไหม", "หยุดไหม", "วันนี้เปิด", "ยังเปิด", "ไปทัน", "เปิด-ปิดวันนี้", "เปิดปิด"],
   time: ["เวลาทำการ", "เวลาเปิด", "กี่โมง", "ตารางเวลา"],
   location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
-  apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด"],
+  apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด", "เช็คนัด", "ตรวจสอบนัด", "เช็คคิว"],
+  services: ["บริการ"],
+  holidays: ["วันหยุด", "ปิดยาว", "หยุดยาว", "หยุดคลินิก"],
+  news: ["ข่าวสาร", "ข่าว", "โปรโมชั่น", "โปรโมชัน", "โปรโมท"],
+  contact: ["ติดต่อ", "เบอร์โทร", "เบอร์", "โทรศัพท์", "ไลน์ไอดี"],
+  booking: ["จองคิว", "จอง", "นัดคิว"],
 };
 
 export function parseAgeMonths(text: string): number | null {
@@ -57,10 +67,15 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   const text = norm(message);
   if (!text) return { intent: "UNKNOWN", text };
 
+  if (has(text, KW.booking))    return { intent: "BOOKING_MENU", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
   if (has(text, KW.status))     return { intent: "CLINIC_STATUS", text };
   if (has(text, KW.time))       return { intent: "CLINIC_TIME", text };
   if (has(text, KW.location))   return { intent: "LOCATION", text };
+  if (has(text, KW.services))   return { intent: "SERVICES", text };
+  if (has(text, KW.holidays))   return { intent: "HOLIDAYS", text };
+  if (has(text, KW.news))       return { intent: "NEWS", text };
+  if (has(text, KW.contact))    return { intent: "CONTACT", text };
 
   const group = await resolveVaccineGroup(text);
   const ageMonths = parseAgeMonths(text);
