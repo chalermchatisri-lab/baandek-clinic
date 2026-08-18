@@ -15,6 +15,76 @@ function toYMD(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
+// ---- Thai date: "2026-08-22" -> "วันเสาร์ที่ 22 สิงหาคม 2569" ----
+const TH_DAYS = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์"];
+const TH_MONTHS = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
+function thaiDate(ymd: string): string {
+  const d = new Date(ymd + "T00:00:00");
+  return `วัน${TH_DAYS[d.getDay()]}ที่ ${d.getDate()} ${TH_MONTHS[d.getMonth()]} ${d.getFullYear() + 543}`;
+}
+
+// ---- Flex confirmation card (matches the old system's design) ----
+function buildBookingFlex(p: { childName: string; date: string; time: string; reason: string }) {
+  const dateThai = thaiDate(p.date);
+  const row = (label: string, value: string) => ({
+    type: "box",
+    layout: "baseline",
+    spacing: "sm",
+    contents: [
+      { type: "text", text: label, color: "#8C8C8C", size: "sm", flex: 2 },
+      { type: "text", text: value, wrap: true, color: "#134E4A", size: "sm", weight: "bold", flex: 5 },
+    ],
+  });
+  return {
+    type: "flex",
+    altText: `✅ จองคิวสำเร็จ ${p.childName} ${dateThai} ${p.time} น.`,
+    contents: {
+      type: "bubble",
+      header: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "16px",
+        backgroundColor: "#12B886",
+        contents: [
+          { type: "text", text: "✅ จองคิวสำเร็จ", color: "#FFFFFF", weight: "bold", size: "lg" },
+        ],
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          row("ชื่อเด็ก", p.childName),
+          row("วันที่", dateThai),
+          row("เวลา", `${p.time} น.`),
+          row("เหตุผล", p.reason),
+          { type: "separator", margin: "lg" },
+          {
+            type: "text",
+            margin: "lg",
+            wrap: true,
+            size: "sm",
+            weight: "bold",
+            color: "#C2410C",
+            text: "กรุณามาถึงคลินิกก่อนนัดหมาย 15 นาที กรณีมาเกินเวลานัดหมาย ถือว่าสละสิทธิ์คิวนั้นค่ะ",
+          },
+          {
+            type: "text",
+            margin: "md",
+            wrap: true,
+            size: "xs",
+            color: "#8C8C8C",
+            text: "กรุณาบันทึกภาพหน้าจอนี้ไว้เป็นหลักฐานค่ะ",
+          },
+        ],
+      },
+    },
+  };
+}
+
 // ---- GET /liff/book — serves the booking form (LIFF page) ----
 booking.get("/liff/book", (c) => {
   const liffId = env.liffId;
@@ -135,7 +205,7 @@ async function submitBooking() {
     }
     statusEl.textContent = 'จองสำเร็จ! กำลังส่งข้อความยืนยัน...';
     if (liff.isInClient()) {
-      await liff.sendMessages([{ type: 'text', text: data.confirmationText }]);
+      await liff.sendMessages([data.confirmationFlex || { type: 'text', text: data.confirmationText }]);
     }
     setTimeout(() => liff.closeWindow(), 1200);
   } catch (e) {
@@ -302,5 +372,11 @@ booking.post("/liff/api/book", async (c) => {
       `เหตุผล: ${inserted.reason}\n\n` +
       `กรุณามาถึงคลินิกก่อนนัดหมาย 15 นาที กรณีมาเกินเวลานัดหมาย ถือว่าสละสิทธิ์คิวนั้นค่ะ\n` +
       `กรุณาแคปหน้าจอนี้ไว้เป็นหลักฐานค่ะ`,
+    confirmationFlex: buildBookingFlex({
+      childName: inserted.child_name,
+      date: inserted.booking_date,
+      time: inserted.booking_time,
+      reason: inserted.reason,
+    }),
   });
 });
