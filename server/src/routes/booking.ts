@@ -101,7 +101,10 @@ booking.get("/liff/book", (c) => {
   .card { background:#fff; border-radius:12px; padding:16px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
   label { display:block; font-size:14px; margin:10px 0 4px; font-weight:600; }
   input, select { width:100%; padding:10px; border:1px solid #ccc; border-radius:8px; font-size:16px; box-sizing:border-box; }
+  .dates-wrap { position:relative; }
   .dates { display:flex; flex-direction:column; gap:8px; padding:4px; max-height:264px; overflow-y:auto; border:1px solid #e0f0ec; border-radius:10px; background:#fafffe; }
+  .dates-wrap.faded::after { content:""; position:absolute; left:1px; right:1px; bottom:1px; height:36px; border-radius:0 0 10px 10px; background:linear-gradient(to bottom, rgba(250,255,254,0), rgba(240,250,247,0.95)); pointer-events:none; }
+  .scroll-hint { font-size:12px; color:#0f766e; margin:2px 0 6px; opacity:.85; }
   .date-btn, .time-btn { padding:10px 14px; border-radius:8px; border:1px solid #14b8a6; background:#fff; color:#0f766e; white-space:nowrap; cursor:pointer; font-size:15px; }
   .date-btn { width:100%; text-align:center; font-weight:600; }
   .date-btn.active, .time-btn.active { background:#14b8a6; color:#fff; }
@@ -115,7 +118,8 @@ booking.get("/liff/book", (c) => {
   <h1>🦕 จองคิว บ้านเด็กคลินิก</h1>
   <div class="card">
     <label>เลือกวันที่</label>
-    <div class="dates" id="dates">กำลังโหลด...</div>
+    <div class="scroll-hint" id="scrollHint">↓ เลื่อนดูวันที่เพิ่มเติม</div>
+    <div class="dates-wrap"><div class="dates" id="dates">กำลังโหลด...</div></div>
     <label>เลือกเวลา</label>
     <div class="times" id="times"></div>
   </div>
@@ -147,7 +151,7 @@ function thaiDateShort(ymd) {
 
 function renderDates() {
   const el = document.getElementById('dates');
-  if (slotsData.length === 0) { el.textContent = 'ไม่มีวันว่างในช่วงนี้ค่ะ'; return; }
+  if (slotsData.length === 0) { el.textContent = 'ไม่มีวันว่างในช่วงนี้ค่ะ'; updateScrollHint(); return; }
   el.innerHTML = '';
   slotsData.forEach(d => {
     const btn = document.createElement('button');
@@ -157,7 +161,21 @@ function renderDates() {
     if (d.date === selectedDate) btn.classList.add('active');
     el.appendChild(btn);
   });
+  updateScrollHint();
 }
+
+// โชว์ hint + เงา เฉพาะตอนที่ยังเลื่อนลงได้
+function updateScrollHint() {
+  const box = document.getElementById('dates');
+  const hint = document.getElementById('scrollHint');
+  const wrap = box.parentElement;
+  const canScroll = box.scrollHeight > box.clientHeight + 4;
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  const show = canScroll && !atBottom;
+  if (hint) hint.style.display = show ? 'block' : 'none';
+  if (wrap) wrap.classList.toggle('faded', show);
+}
+document.getElementById('dates').addEventListener('scroll', updateScrollHint);
 
 function renderTimes() {
   const el = document.getElementById('times');
