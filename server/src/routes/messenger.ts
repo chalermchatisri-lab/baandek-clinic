@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages } from "../services/reply";
+import { buildReplyMessages, type TextMessage } from "../services/reply";
 
 export const messenger = new Hono();
 
@@ -13,7 +13,32 @@ messenger.get("/webhook/messenger", (c) => {
   return c.text("Invalid verify token", 403);
 });
 
-async function send(recipientId: string, text: string) {
+type QuickReplyItem = { type: string; action: { type: string; label: string; text?: string; uri?: string } };
+
+// Converts our shared LINE-style quickReply into Messenger's quick_replies format.
+// Only "message" actions translate cleanly (tap -> sends that text back, same as LINE).
+// "uri" actions here point at the LIFF booking page, which only authenticates
+// inside the LINE app — opened from Messenger it just shows "เปิดหน้านี้ผ่านแอป LINE ค่ะ".
+// So uri buttons are intentionally dropped until a channel-agnostic Landing Page
+// exists for booking. This fixes "เช็คนัดหมาย" etc. now; booking on Messenger is
+// a separate follow-up (Landing Page), not something this patch can shortcut.
+function toMessengerQuickReplies(items?: QuickReplyItem[]) {
+  const usable = (items ?? []).filter((it) => it.action?.type === "message" && it.action.text);
+  if (!usable.length) return undefined;
+  return usable.map((it) => ({
+    content_type: "text" as const,
+    title: it.action.label.slice(0, 20),
+    payload: it.action.text,
+  }));
+}
+
+async function send(recipientId: string, msg: TextMessage) {
+  const message: Record<string, unknown> = { text: msg.text };
+  const quickReplies = toMessengerQuickReplies(
+    (msg.quickReply as { items?: QuickReplyItem[] } | undefined)?.items,
+  );
+  if (quickReplies) message.quick_replies = quickReplies;
+
   await fetch(
     `https://graph.facebook.com/v20.0/me/messages?access_token=${env.fbPageToken}`,
     {
@@ -22,7 +47,7 @@ async function send(recipientId: string, text: string) {
       body: JSON.stringify({
         recipient: { id: recipientId },
         messaging_type: "RESPONSE",
-        message: { text },
+        message,
       }),
     },
   );
@@ -38,8 +63,7 @@ messenger.post("/webhook/messenger", async (c) => {
       .filter((m: any) => m.message?.text && m.sender?.id)
       .map(async (m: any) => {
         const msgs = await buildReplyMessages(String(m.message.text));
-        // Messenger = plain text; send each text bubble in order.
-        for (const msg of msgs) await send(m.sender.id, msg.text);
+        for (const msg of msgs) await send(m.sender.id, msg);
       }),
   );
   return c.text("EVENT_RECEIVED");
