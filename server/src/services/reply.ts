@@ -173,13 +173,27 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
       return [{ type: "text", text: "สนใจข้อมูลเรื่องไหนดีคะ เลือกได้เลยค่ะ 👇", quickReply: { items } }];
     }
     case "VACCINE_NEWS": {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await admin
+        .from("vaccine_news").select("vaccine_name, description")
+        .eq("status", true)
+        .in("channel", ["bot", "both"])
+        .or(`expire_date.is.null,expire_date.gte.${today}`);
+      if (!data || data.length === 0)
+        return [{ type: "text", text: "ไม่มีวัคซีนใหม่ช่วงนี้ค่ะ" }];
+      const lines = data.map((n) => `📰 ${n.vaccine_name}\n${n.description ?? ""}`);
       const [footer, version] = await Promise.all([config("FOOTER"), config("VERSION")]);
       const tail = [footer, version].filter(Boolean).join("\n");
-      return [{ type: "text", text: "ไม่มีวัคซีนใหม่ช่วงนี้ค่ะ" + (tail ? `\n\n${tail}` : "") }];
+      return [{ type: "text", text: "💉 วัคซีนใหม่\n\n" + lines.join("\n\n") + (tail ? `\n\n${tail}` : "") }];
     }
     case "PROMOTIONS": {
+      const today = new Date().toISOString().slice(0, 10);
       const { data: promos } = await admin
-        .from("promotions").select("title, vaccine_group, discount, condition").eq("active", true);
+        .from("promotions").select("title, vaccine_group, discount, condition")
+        .eq("active", true)
+        .in("kind", ["bot", "both"])
+        .or(`start_date.is.null,start_date.lte.${today}`)
+        .or(`end_date.is.null,end_date.gte.${today}`);
       if (!promos || promos.length === 0)
         return [{ type: "text", text: "ช่วงนี้ยังไม่มีโปรโมชันค่ะ 😊" }];
       const lines = promos.map((p) =>
