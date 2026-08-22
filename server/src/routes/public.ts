@@ -77,9 +77,9 @@ publicApi.get("/public/content-data", async (c) => {
   // ---- Reshape to the exact Apps Script field names/casing ----
   const teamOut = (team.data ?? []).map((r) => ({
     Name: r.name,
-    Role: r.role,
-    Photo_URL: r.photo_url,
-    Credentials: r.credentials,
+    Role: r.role ?? "",
+    Photo_URL: r.photo_url ?? "",
+    Credentials: r.credentials ?? "",
     Order: r.display_order,
     Active: r.active,
   }));
