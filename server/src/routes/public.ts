@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { admin } from "../lib/supabase";
+import { getClinicStatus } from "../services/clinicStatus";
 
 export const publicApi = new Hono();
 
@@ -143,5 +144,73 @@ publicApi.get("/public/content-data", async (c) => {
     promotions: promotionsOut,
     vaccineNews: vaccineNewsOut,
     links: linksOut,
+  });
+});
+
+// ---- GET /public/clinic-status ----
+// Matches the Apps Script `mode=clinic-status` JSON contract (the fields the
+// Landing page actually reads: clinic.status/reason/message/sessions[]).
+//
+// getClinicStatus() (shared with the LINE/Messenger bot's "วันหยุด" reply)
+// already resolves today's sessions correctly, including full/partial
+// closures — that part is reused as-is, untouched. But that function
+// answers "does today have any session at all", not "is it open RIGHT NOW";
+// Apps Script's contract is real-time (e.g. Sat 17:59, past the 15:00
+// close, correctly reports CLOSED even though Saturday is a normal open
+// day) — so a same-day time-of-day check is layered on top here, without
+// touching the shared service.
+//
+// NOTE: clinic_hours.open_time/close_time are stored without zero-padding
+// (e.g. "9:00", not "09:00"). Apps Script's contract always zero-pads
+// (e.g. "09:00"). Times are normalized here for correct string comparison
+// AND to keep the sessions the Landing page displays visually identical
+// to what it showed before this migration.
+function padHM(t: string): string {
+  const [h, m] = t.split(":");
+  return `${(h ?? "0").padStart(2, "0")}:${(m ?? "0").padStart(2, "0")}`;
+}
+
+function nowBangkokHM(): string {
+  const now = new Date(Date.now() + 7 * 3600 * 1000);
+  return `${String(now.getUTCHours()).padStart(2, "0")}:${String(now.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+publicApi.get("/public/clinic-status", async (c) => {
+  const status = await getClinicStatus();
+  const sessions = status.sessions.map((s) => ({
+    open: padHM(s.open),
+    close: padHM(s.close),
+  }));
+
+  // Fully/partially closed today (closure or a day with zero sessions) —
+  // getClinicStatus() already decided this; trust it as-is.
+  if (!status.isOpen) {
+    return c.json({
+      ok: true,
+      date: status.date,
+      generatedAt: new Date().toISOString(),
+      clinic: {
+        status: "CLOSED",
+        reason: "",
+        message: status.closureMessage ?? "",
+        sessions,
+      },
+    });
+  }
+
+  // Today has sessions — check whether the current time falls inside one.
+  const nowHM = nowBangkokHM();
+  const withinSession = sessions.some((s) => nowHM >= s.open && nowHM < s.close);
+
+  return c.json({
+    ok: true,
+    date: status.date,
+    generatedAt: new Date().toISOString(),
+    clinic: {
+      status: withinSession ? "OPEN" : "CLOSED",
+      reason: "",
+      message: withinSession ? "" : "ขณะนี้อยู่นอกเวลาทำการ",
+      sessions,
+    },
   });
 });
