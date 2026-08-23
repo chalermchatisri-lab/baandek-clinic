@@ -1,8 +1,17 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import { admin } from "../lib/supabase";
 import { getClinicStatus } from "../services/clinicStatus";
 
 export const publicApi = new Hono();
+
+// This router serves public, non-sensitive read-only content to the
+// Landing page's browser-side fetch() (a different origin: the Cloudflare
+// Worker domain). Without CORS headers, the browser silently blocks the
+// response even though the request succeeds — Apps Script sent these
+// headers automatically, Hono does not by default. No cookies/auth are
+// involved, so a wildcard origin is safe here.
+publicApi.use("*", cors({ origin: "*", allowMethods: ["GET"] }));
 
 // ---- GET /public/content-data ----
 // Matches the Apps Script `mode=content-data` JSON contract exactly, so the
