@@ -223,3 +223,191 @@ publicApi.get("/public/clinic-status", async (c) => {
     },
   });
 });
+
+// ============================================================================
+// Vaccine Advisor endpoints (item 13) — replace Apps Script vaccine-advisor-*
+// ============================================================================
+
+// ---- GET /public/vaccine-advisor-data ----
+// Reconstructs the Apps Script `mode=vaccine-advisor-data` contract:
+//   { ages: [{AgeCode, DisplayName, SortOrder}],
+//     vaccines: [{VaccineID, VaccineName, VaccineNameT, AgeGroup, Category,
+//                 Price, Status, GROUP, DisplayOrder, DoseName, Description,
+//                 CatchUp, Recommendation, Warning, Priority, ProductCode}],
+//     promos: [{PromoID, PromoName, VaccineGroup, Discount, Condition,
+//               Status, StartDate, EndDate, DisplayPeriod}] }
+//
+// The flat per-dose `vaccines[]` array is rebuilt by joining the vaccines
+// table (identity/price/category/group/priority — shared with the bot) to
+// vaccine_doses (the per-dose age schedule — Advisor-only). This keeps price
+// editing single-source in the vaccines table while giving the Advisor its
+// full dose-by-dose view.
+publicApi.get("/public/vaccine-advisor-data", async (c) => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [ages, doses, promos] = await Promise.all([
+    admin
+      .from("age_guide")
+      .select("age_code,display_name,sort_order")
+      .order("sort_order", { ascending: true }),
+    admin
+      .from("vaccine_doses")
+      .select(
+        "vaccine_id,dose_name,age_group,display_order,description,catch_up,recommendation,warning,name_th_override,status," +
+          "vaccines!inner(vaccine_id,name,name_th,price,category,group_code,priority,product_code,status)"
+      )
+      .eq("status", "ACTIVE")
+      .order("display_order", { ascending: true }),
+    admin
+      .from("promotions")
+      .select(
+        "code,title,vaccine_group,discount,condition,start_date,end_date,display_period,active,kind"
+      )
+      .in("kind", ["bot", "both"])
+      .eq("active", true)
+      .or(`end_date.is.null,end_date.gte.${today}`),
+  ]);
+
+  const firstError = ages.error || doses.error || promos.error;
+  if (firstError) {
+    return c.json({ ok: false, error: firstError.message }, 500);
+  }
+
+  const agesOut = (ages.data ?? []).map((r) => ({
+    AgeCode: r.age_code,
+    DisplayName: r.display_name,
+    SortOrder: r.sort_order,
+  }));
+
+  // Each vaccine_doses row + its parent vaccines row = one flat catalog entry,
+  // exactly matching the old Sheet's 1-row-per-dose model.
+  type DoseRow = {
+    vaccine_id: string; dose_name: string; age_group: string;
+    display_order: number | null; description: string | null;
+    catch_up: string | null; recommendation: string | null;
+    warning: string | null; name_th_override: string | null; status: string | null;
+    vaccines: {
+      vaccine_id: string; name: string | null; name_th: string | null;
+      price: number | null; category: string | null; group_code: string | null;
+      priority: string | null; product_code: string | null; status: string | null;
+    };
+  };
+  const doseRows = (doses.data ?? []) as unknown as DoseRow[];
+  const vaccinesOut = doseRows.map((d) => {
+    const v = d.vaccines;
+    return {
+      VaccineID: v.vaccine_id,
+      VaccineName: v.name ?? "",
+      // Per-dose Thai label override (e.g. booster "...กระตุ้น") wins over the base name.
+      VaccineNameT: d.name_th_override ?? v.name_th ?? "",
+      AgeGroup: d.age_group,
+      Category: v.category ?? "",
+      Price: v.price == null ? null : Number(v.price),
+      Status: v.status,
+      GROUP: v.group_code ?? "",
+      DisplayOrder: d.display_order,
+      DoseName: d.dose_name,
+      Description: d.description ?? "",
+      CatchUp: d.catch_up ?? "",
+      Recommendation: d.recommendation ?? "",
+      Warning: d.warning ?? "",
+      Priority: v.priority ?? "",
+      ProductCode: v.product_code ?? "",
+    };
+  });
+
+  const promosOut = (promos.data ?? []).map((r) => ({
+    PromoID: r.code,
+    PromoName: r.title,
+    VaccineGroup: r.vaccine_group ?? "",
+    Discount: r.discount == null || r.discount === "" ? r.discount : Number(r.discount),
+    Condition: r.condition ?? "",
+    Status: r.active ? "ACTIVE" : "INACTIVE",
+    StartDate: r.start_date ?? "",
+    EndDate: r.end_date ?? "",
+    DisplayPeriod: r.display_period ?? "",
+  }));
+
+  return c.json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    ages: agesOut,
+    vaccines: vaccinesOut,
+    promos: promosOut,
+  });
+});
+
+// ---- GET /public/vaccine-advisor-status ----
+// Reconstructs the Apps Script `mode=vaccine-advisor-status` preformatted Thai
+// message: today's open/closed line + service hours + upcoming continuous
+// closure block. Supports ?testDate=YYYY-MM-DD (Apps Script parity).
+//
+// getClinicStatus() gives today's status/sessions (reused as-is). The
+// "upcoming closures" block is NOT part of getClinicStatus(), so this route
+// runs its own query for the next future-dated active CLOSE_ALL closure.
+const THAI_MONTHS = [
+  "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+  "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+];
+
+function thaiFullDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${THAI_MONTHS[(m ?? 1) - 1]} ${(y ?? 0) + 543}`;
+}
+
+// "21–23 กันยายน 2569" when same month/year; otherwise full both ends.
+function thaiDateRange(startIso: string, endIso: string): string {
+  const [sy, sm, sd] = startIso.split("-").map(Number);
+  const [ey, em, ed] = endIso.split("-").map(Number);
+  if (sy === ey && sm === em) {
+    return `${sd}–${ed} ${THAI_MONTHS[(sm ?? 1) - 1]} ${(sy ?? 0) + 543}`;
+  }
+  return `${thaiFullDate(startIso)} – ${thaiFullDate(endIso)}`;
+}
+
+function daysInclusive(startIso: string, endIso: string): number {
+  const a = Date.parse(startIso + "T00:00:00Z");
+  const b = Date.parse(endIso + "T00:00:00Z");
+  return Math.round((b - a) / 86400000) + 1;
+}
+
+publicApi.get("/public/vaccine-advisor-status", async (c) => {
+  const testDate = c.req.query("testDate");
+  const status = await getClinicStatus(testDate);
+  const refDate = status.date; // YYYY-MM-DD the status was computed for
+
+  // Today line + hours
+  const openDot = status.isOpen ? "🟢" : "🔴";
+  const openText = status.isOpen ? "วันนี้คลินิกเปิด" : "วันนี้คลินิกปิด";
+  let msg = `${openDot} ${openText}`;
+
+  if (status.isOpen && status.sessions.length > 0) {
+    const hours = status.sessions
+      .map((s) => `${padHM(s.open)}–${padHM(s.close)} น.`)
+      .join("\n");
+    msg += `\n\n🕘 เวลาให้บริการ\n${hours}`;
+  } else if (!status.isOpen && status.closureMessage) {
+    msg += `\n${status.closureMessage}`;
+  }
+
+  // Upcoming continuous closure (next future-dated active CLOSE_ALL after today)
+  const { data: upcoming } = await admin
+    .from("closures")
+    .select("start_date,end_date,reason,message,closure_type")
+    .eq("active", true)
+    .eq("closure_type", "CLOSE_ALL")
+    .gt("start_date", refDate)
+    .order("start_date", { ascending: true })
+    .limit(1);
+
+  const next = upcoming?.[0];
+  if (next) {
+    const range = thaiDateRange(next.start_date, next.end_date);
+    const total = daysInclusive(next.start_date, next.end_date);
+    msg += `\n\n📅 วันหยุดต่อเนื่องที่กำลังจะมาถึง\n${range}`;
+    if (next.reason) msg += `\nเนื่องจาก${next.reason}`;
+    msg += `\nรวม ${total} วัน`;
+  }
+
+  return c.json({ ok: true, generatedAt: new Date().toISOString(), message: msg });
+});
