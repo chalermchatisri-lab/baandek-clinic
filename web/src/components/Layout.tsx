@@ -2,9 +2,33 @@ import { useState } from "react";
 import { TABLES, GROUP_ORDER, type TableConfig } from "../lib/tables";
 import { supabase } from "../lib/supabase";
 
+const VACCINE_ADVISOR_CACHE_CLEAR_URL =
+  "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor/api/cache-clear";
+
 export function Layout({ active, onSelect, email, children }:
   { active: TableConfig; onSelect: (t: TableConfig) => void; email: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const [cacheState, setCacheState] = useState<"idle" | "loading" | "ok" | "error">("idle");
+
+  async function clearVaccineAdvisorCache() {
+    setCacheState("loading");
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("ไม่พบ session — กรุณาล็อกอินใหม่");
+      const res = await fetch(VACCINE_ADVISOR_CACHE_CLEAR_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      const body = await res.json();
+      if (!res.ok || !body.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setCacheState("ok");
+    } catch {
+      setCacheState("error");
+    } finally {
+      setTimeout(() => setCacheState("idle"), 2500);
+    }
+  }
 
   const nav = (
     <nav className="flex flex-col gap-6 p-4">
@@ -53,6 +77,11 @@ export function Layout({ active, onSelect, email, children }:
           <div className="hidden text-sm text-clinic-muted lg:block">ระบบจัดการบ้านเด็กคลินิก</div>
           <div className="flex items-center gap-3">
             <span className="hidden text-sm text-clinic-muted sm:block">{email}</span>
+            <button onClick={clearVaccineAdvisorCache} disabled={cacheState === "loading"}
+              title="ล้าง cache หน้า Vaccine Advisor (baandek-line-worker) ให้เห็นข้อมูลล่าสุดทันที ไม่ต้องรอ 15 นาที"
+              className="rounded-lg border border-clinic-border px-3 py-1.5 text-sm hover:bg-clinic-bg disabled:opacity-50">
+              {cacheState === "loading" ? "กำลังล้าง…" : cacheState === "ok" ? "ล้างแล้ว ✓" : cacheState === "error" ? "ล้างไม่สำเร็จ ✗" : "ล้าง Cache หน้าวัคซีน"}
+            </button>
             <button onClick={() => supabase.auth.signOut()}
               className="rounded-lg border border-clinic-border px-3 py-1.5 text-sm hover:bg-clinic-bg">ออกจากระบบ</button>
           </div>
