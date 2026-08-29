@@ -230,7 +230,12 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
         quickReply: { items },
       }];
     }
-    default:
-      return [{ type: "text", text: "สวัสดีค่ะ บ้านเด็กคลินิก พิมพ์ชื่อวัคซีนหรือ 'เวลาทำการ' ได้เลยค่ะ" }];
+    default: {
+      const fallback = await config("FALLBACK_MESSAGE");
+      return [{
+        type: "text",
+        text: fallback ?? "สวัสดีค่ะ บ้านเด็กคลินิก พิมพ์ชื่อวัคซีนหรือ 'เวลาทำการ' ได้เลยค่ะ",
+      }];
+    }
   }
 }

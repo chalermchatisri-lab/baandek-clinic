@@ -224,6 +224,39 @@ publicApi.get("/public/clinic-status", async (c) => {
   });
 });
 
+// ---- GET /public/clinic-hours ----
+// The Landing page's "เวลาตรวจปกติ" (regular hours) widget used to have this
+// weekly schedule hardcoded directly in JSX, so it went stale whenever
+// clinic_hours changed (e.g. weekend open time moved 09:00 -> 10:00) even
+// though the "today/tomorrow" status widget right next to it — built on
+// /public/clinic-status above — read the live table correctly. This route
+// gives that widget the same live source: the full week, OPEN days only,
+// in weekday order, with the same zero-padding as /public/clinic-status.
+const DAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+publicApi.get("/public/clinic-hours", async (c) => {
+  const { data, error } = await admin
+    .from("clinic_hours")
+    .select("day,session,open_time,close_time,status")
+    .order("session", { ascending: true });
+  if (error) return c.json({ ok: false, error: error.message }, 500);
+
+  const byDay = new Map<string, { open: string; close: string }[]>();
+  for (const row of data ?? []) {
+    if (row.status !== "OPEN") continue;
+    const list = byDay.get(row.day) ?? [];
+    list.push({ open: padHM(row.open_time!), close: padHM(row.close_time!) });
+    byDay.set(row.day, list);
+  }
+
+  const hours = DAY_ORDER.filter((d) => byDay.has(d)).map((day) => ({
+    day,
+    sessions: byDay.get(day)!,
+  }));
+
+  return c.json({ ok: true, generatedAt: new Date().toISOString(), hours });
+});
+
 // ============================================================================
 // Vaccine Advisor endpoints (item 13) — replace Apps Script vaccine-advisor-*
 // ============================================================================
