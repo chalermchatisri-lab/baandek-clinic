@@ -190,7 +190,11 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (group || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน")) {
     if (has(text, KW.price)) return { intent: "VACCINE_PRICE", text, vaccineGroup: group, ageMonths };
     if (has(text, KW.avail)) return { intent: "VACCINE_AVAILABILITY", text, vaccineGroup: group, ageMonths };
-    if (group) return { intent: "VACCINE_INFO", text, vaccineGroup: group, ageMonths };
+    // Falls here for "วัคซีน" + age with no specific product/price/avail word
+    // (e.g. every age-picker button payload: "วัคซีน 2 เดือน") — this used to fall
+    // all the way through to UNKNOWN/FALLBACK_MESSAGE instead of reaching
+    // VACCINE_INFO's own no-group handling in reply.ts.
+    return { intent: "VACCINE_INFO", text, vaccineGroup: group, ageMonths };
   }
 
   // Only reach the AI when cheap paths miss — keeps latency + cost low.

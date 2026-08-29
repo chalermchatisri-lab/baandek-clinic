@@ -1,7 +1,7 @@
 import { admin } from "../lib/supabase";
 import { env } from "../lib/env";
 import { detectIntent } from "./intent";
-import { buildVaccineAdvice, DOCTOR_REFERRAL } from "./vaccine";
+import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeCardByMonths, buildAgeGroupVaccineList } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone } from "./appointmentCheck";
 
@@ -38,6 +38,29 @@ const MEDICAL_QUESTION_TEXT_MESSAGE =
 const PRODUCT_STOCK_MESSAGE =
   "ขอบคุณที่สอบถามนะคะ 🙏 เรื่องสต็อกสินค้า (นม/ยา/เวชภัณฑ์) ขณะนี้ระบบยังไม่สามารถเช็คสต็อกแบบเรียลไทม์ได้ค่ะ " +
   "กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงเพื่อความชัดเจนก่อนเดินทางมานะคะ ☎️ 085-065-9715 (ในเวลาทำการ)";
+
+// Age-picker quick-reply — the entry point when someone asks about vaccines
+// without naming one or giving an age (e.g. bare "วัคซีน"). Each button resends
+// its own payload through the normal text pipeline: "วัคซีน 2 เดือน" etc. always
+// includes the word "วัคซีน" so it passes the existing vaccine-branch gate below,
+// and every payload uses an explicit month number (not "1 ปีครึ่ง") because
+// parseAgeMonths() doesn't understand "ครึ่ง" — sending "18 เดือน" sidesteps that
+// instead of teaching the parser a one-off case. "4-12 ปี" is a range, not a
+// single age, so it's matched as literal text below rather than parsed as a month count.
+const AGE_PICKER_ITEMS = [
+  { label: "2 เดือน", text: "วัคซีน 2 เดือน" },
+  { label: "4 เดือน", text: "วัคซีน 4 เดือน" },
+  { label: "6 เดือน", text: "วัคซีน 6 เดือน" },
+  { label: "9 เดือน", text: "วัคซีน 9 เดือน" },
+  { label: "1 ปี", text: "วัคซีน 12 เดือน" },
+  { label: "1 ปีครึ่ง", text: "วัคซีน 18 เดือน" },
+  { label: "2 ปี", text: "วัคซีน 24 เดือน" },
+  { label: "3 ปี", text: "วัคซีน 36 เดือน" },
+  { label: "4 ปี", text: "วัคซีน 48 เดือน" },
+  { label: "4-12 ปี", text: "วัคซีน 4-12 ปี" },
+].map((it) => ({ type: "action", action: { type: "message", label: it.label, text: it.text } }));
+
+const AGE_GROUP_4_TO_12_YEARS = ["48M", "51M", "132M", "138M"];
 
 const INCOMPLETE_PHONE_MESSAGE =
   "ขออภัยค่ะ เบอร์โทรศัพท์ที่พิมพ์มายังไม่ครบ 10 หลักค่ะ 🙏\n" +
@@ -154,15 +177,34 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
     case "VACCINE_INFO":
     case "VACCINE_PRICE":
     case "VACCINE_AVAILABILITY": {
-      if (!r.vaccineGroup)
+      if (!r.vaccineGroup) {
+        const link = (await config("VACCINE_ADVISOR")) ??
+          "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor";
+
+        // The "4-12 ปี" picker button is a range, not a single age — matched as
+        // literal text rather than going through r.ageMonths (see AGE_PICKER_ITEMS).
+        if (text.includes("4-12 ปี")) {
+          return [{ type: "text", text: await buildAgeGroupVaccineList(AGE_GROUP_4_TO_12_YEARS, "4-12 ปี", link) }];
+        }
+        // Age already clear -> answer directly, skip the picker (decided: don't
+        // re-ask what the user already told us).
+        if (r.ageMonths != null) {
+          const card = buildAgeCardByMonths(r.ageMonths, link);
+          if (card) return [{ type: "text", text: card }];
+          if (r.ageMonths === 24) return [{ type: "text", text: await buildAgeGroupVaccineList(["24M"], "2 ปี", link) }];
+          if (r.ageMonths === 36) return [{ type: "text", text: await buildAgeGroupVaccineList(["36M"], "3 ปี", link) }];
+          if (r.ageMonths === 48) return [{ type: "text", text: await buildAgeGroupVaccineList(["48M"], "4 ปี", link) }];
+        }
+
+        // No age given, or an age outside every known bucket -> show the picker.
         return [{
           type: "text",
-          text: "💉 ตรวจสอบราคาวัคซีน\n\n" +
-            "ราคาวัคซีนขึ้นอยู่กับชนิด ยี่ห้อ จำนวนเข็ม และช่วงอายุของเด็กค่ะ\n\n" +
-            "สามารถตรวจสอบรายการและราคาเบื้องต้นได้ที่\n" +
-            "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor\n\n" +
-            "กรุณายืนยันราคาและสต็อกกับเจ้าหน้าที่อีกครั้งก่อนรับบริการค่ะ",
+          text:
+            "💉 กรุณาเลือกช่วงอายุของน้อง เพื่อดูวัคซีนที่แนะนำตามเกณฑ์อายุค่ะ 😊\n\n" +
+            `หรือดูรายการและราคาทั้งหมดได้ที่\n${link}`,
+          quickReply: { items: AGE_PICKER_ITEMS },
         }];
+      }
       const res = await buildVaccineAdvice(r.vaccineGroup, r.ageMonths ?? null);
       // Standard rules only — anything outside a matching rule -> refer to doctor.
       if (res.status !== "ok" || res.cards.length === 0) {
