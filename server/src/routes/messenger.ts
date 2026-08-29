@@ -67,7 +67,14 @@ messenger.post("/webhook/messenger", async (c) => {
         if (!m.message?.text) {
           return send(m.sender.id, { type: "text", text: MEDICAL_QUESTION_ATTACHMENT_MESSAGE });
         }
-        const msgs = await buildReplyMessages(String(m.message.text), "messenger");
+        // A quick-reply tap echoes back message.text = the button's *title* (the
+        // visible label, e.g. "6 เดือน") — Messenger's actual payload is a separate
+        // message.quick_reply.payload field the webhook has to read explicitly, unlike
+        // LINE where the message action's "text" IS what gets sent on tap. Every quick
+        // reply built in reply.ts sets title=label, payload=the real intended text
+        // (toMessengerQuickReplies in this file), so read payload first when present.
+        const inputText = m.message.quick_reply?.payload ?? m.message.text;
+        const msgs = await buildReplyMessages(String(inputText), "messenger");
         for (const msg of msgs) await send(m.sender.id, msg);
       }),
   );
