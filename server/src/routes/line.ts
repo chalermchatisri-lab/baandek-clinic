@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages } from "../services/reply";
+import { buildReplyMessages, MEDICAL_QUESTION_ATTACHMENT_MESSAGE } from "../services/reply";
 
 export const line = new Hono();
 
@@ -35,8 +35,16 @@ line.post("/webhook/line", async (c) => {
   const body = JSON.parse(raw) as { events?: any[] };
   await Promise.all(
     (body.events ?? [])
-      .filter((e) => e.type === "message" && e.message?.type === "text" && e.replyToken)
-      .map(async (e) => reply(e.replyToken, await buildReplyMessages(String(e.message.text)))),
+      .filter((e) => e.type === "message" && e.replyToken)
+      .map(async (e) => {
+        // Non-text message events (image/sticker/video/audio/file/location) used
+        // to be filtered out above and get zero reply — worst case: a parent
+        // sends a photo of their sick child and hears nothing back at all.
+        if (e.message?.type !== "text") {
+          return reply(e.replyToken, [{ type: "text", text: MEDICAL_QUESTION_ATTACHMENT_MESSAGE }]);
+        }
+        return reply(e.replyToken, await buildReplyMessages(String(e.message.text), "line"));
+      }),
   );
   return c.text("OK");
 });

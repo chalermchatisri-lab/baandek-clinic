@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages, type TextMessage } from "../services/reply";
+import { buildReplyMessages, MEDICAL_QUESTION_ATTACHMENT_MESSAGE, type TextMessage } from "../services/reply";
 
 export const messenger = new Hono();
 
@@ -60,9 +60,14 @@ messenger.post("/webhook/messenger", async (c) => {
   const events = (body.entry ?? []).flatMap((e: any) => e.messaging ?? []);
   await Promise.all(
     events
-      .filter((m: any) => m.message?.text && m.sender?.id)
+      .filter((m: any) => m.sender?.id && (m.message?.text || m.message?.attachments))
       .map(async (m: any) => {
-        const msgs = await buildReplyMessages(String(m.message.text));
+        // Attachments (image/sticker/video/etc., e.g. a parent sending a photo of
+        // their sick child) used to be silently dropped here — no reply at all.
+        if (!m.message?.text) {
+          return send(m.sender.id, { type: "text", text: MEDICAL_QUESTION_ATTACHMENT_MESSAGE });
+        }
+        const msgs = await buildReplyMessages(String(m.message.text), "messenger");
         for (const msg of msgs) await send(m.sender.id, msg);
       }),
   );

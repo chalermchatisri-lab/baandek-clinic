@@ -21,6 +21,24 @@ async function config(key: string): Promise<string | null> {
   return data?.value ?? null;
 }
 
+// Used both when a message-type event isn't text (image/sticker/etc. — see
+// line.ts/messenger.ts) and for the MEDICAL_QUESTION intent below. Two variants
+// because the reference text opens with "ขอบคุณที่ส่งรูปมาให้ดูนะคะ" (thanks for
+// the photo), which would be wrong to say back to someone who only typed words.
+export const MEDICAL_QUESTION_ATTACHMENT_MESSAGE =
+  "ขอบคุณที่ส่งรูปมาให้ดูนะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากรูปภาพหรือข้อความได้ค่ะ " +
+  "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
+  "หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ 085-065-9715";
+
+const MEDICAL_QUESTION_TEXT_MESSAGE =
+  "ขอบคุณที่แจ้งอาการมานะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากข้อความได้ค่ะ " +
+  "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
+  "หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ 085-065-9715";
+
+const PRODUCT_STOCK_MESSAGE =
+  "ขอบคุณที่สอบถามนะคะ 🙏 เรื่องสต็อกสินค้า (นม/ยา/เวชภัณฑ์) ขณะนี้ระบบยังไม่สามารถเช็คสต็อกแบบเรียลไทม์ได้ค่ะ " +
+  "กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงเพื่อความชัดเจนก่อนเดินทางมานะคะ ☎️ 085-065-9715 (ในเวลาทำการ)";
+
 const INCOMPLETE_PHONE_MESSAGE =
   "ขออภัยค่ะ เบอร์โทรศัพท์ที่พิมพ์มายังไม่ครบ 10 หลักค่ะ 🙏\n" +
   "กรุณาตรวจสอบเลขหมายอีกครั้ง แล้วพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) ให้ครบถ้วนนะคะ\n" +
@@ -81,7 +99,9 @@ async function closuresSummaryText(): Promise<string> {
   return [weekly, list].filter(Boolean).join("\n\n");
 }
 
-export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
+export type Channel = "line" | "messenger";
+
+export async function buildReplyMessages(text: string, channel: Channel): Promise<TextMessage[]> {
   // Fast path: a lone phone number = user answering the appointment prompt.
   if (looksLikePhoneAttempt(text)) {
     if (!isCompletePhone(text)) {
@@ -125,6 +145,10 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
           "ข้อมูลนี้เป็นแนวทางมาตรฐานค่ะ 🩺 กรณีรับล่าช้า ประวัติไม่ครบ หรือมีข้อสงสัย กรุณาปรึกษาแพทย์ที่คลินิกค่ะ",
       }];
     }
+    case "MEDICAL_QUESTION":
+      return [{ type: "text", text: MEDICAL_QUESTION_TEXT_MESSAGE }];
+    case "PRODUCT_STOCK_INQUIRY":
+      return [{ type: "text", text: PRODUCT_STOCK_MESSAGE }];
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
       const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
@@ -160,11 +184,34 @@ export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
               (maps ? `\n\nเปิดเส้นทางใน Google Maps:\n${maps}` : ""),
       }];
     }
-    case "APPOINTMENT_CHANGE":
+    case "APPOINTMENT_CHANGE": {
+      // The old text ("ต้องการตรวจสอบ/เลื่อนนัดใช่ไหมคะ") implied the bot could
+      // process a reschedule just from a phone number — it can't; booking.ts only
+      // creates new bookings, nothing here ever modifies an existing appointment.
+      // That was especially misleading for a *narrative* message ("มีนัดวันที่ 14
+      // แต่ติดธุระเลยไปวันเสาร์แทนค่ะ") which this same keyword bucket also catches
+      // (see intent.ts KW.apptChange's "นัด" entry) — the old reply ignored what
+      // the user just said and asked them to start over. This version is honest
+      // about what chat can and can't do: real changes need the clinic directly.
+      //
+      // Split by channel: LINE already has a "เช็คนัดหมาย" Rich Menu button, so
+      // repeating the phone-number instructions here is redundant. Messenger has
+      // no phone-check flow at all (LIFF booking only opens inside LINE), so it
+      // gets a nudge toward the LINE OA instead of a dead-end.
+      const phone = (await config("PHONE")) ?? "085-065-9715";
+      const base =
+        `รับทราบค่ะ 🗓️ หากต้องการเลื่อน/เปลี่ยนแปลงนัดหมาย รบกวนติดต่อเจ้าหน้าที่คลินิกโดยตรงเพื่อยืนยันการเปลี่ยนแปลงนะคะ ☎️ ${phone}`;
+      if (channel === "line") {
+        return [{ type: "text", text: base }];
+      }
+      const lineOa = (await config("LINE_OA")) ?? "@739fjvrr";
       return [{
         type: "text",
-        text: "ต้องการตรวจสอบ/เลื่อนนัดใช่ไหมคะ 🗓️\nกรุณาพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) เพื่อดูนัดที่กำลังจะถึงค่ะ",
+        text: base +
+          `\n\n💡 ทราบหรือไม่คะ ทาง LINE Official Account "คลินิกบ้านเด็ก" สามารถเช็คนัดหมายด้วยเบอร์โทรได้เองทันทีค่ะ ` +
+          `เพิ่มเพื่อนได้ที่ LINE ID: ${lineOa}`,
       }];
+    }
     case "SERVICES": {
       const phone = await config("PHONE");
       return [{

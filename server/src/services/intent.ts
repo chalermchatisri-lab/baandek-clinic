@@ -9,6 +9,8 @@ export type Intent =
   | "VACCINE_PRICE"
   | "VACCINE_AVAILABILITY"
   | "VACCINE_INFO"
+  | "MEDICAL_QUESTION"
+  | "PRODUCT_STOCK_INQUIRY"
   | "SERVICES"
   | "HOLIDAYS"
   | "NEWS"
@@ -48,6 +50,39 @@ const KW = {
   closureAnnounce: ["ประกาศปิดคลินิก"],
   contact: ["ติดต่อ", "เบอร์โทร", "เบอร์", "โทรศัพท์", "ไลน์ไอดี"],
   booking: ["จองคิว", "จอง", "นัดคิว"],
+  // Concrete symptom/sickness phrasing — checked BEFORE vaccine-alias resolution
+  // so a disease name (e.g. "มือเท้าปาก", also a vaccine_aliases entry) said in a
+  // symptom sentence ("ลูกเป็นมือเท้าปาก ไม่สบายค่ะ") routes here instead of always
+  // being read as a vaccine question. Deliberately avoids bare short syllables like
+  // "ไอ" or "ยา" that collide with unrelated words (e.g. "ยา" is a substring of the
+  // very common "อยาก") — every entry is a full phrase, matching the style of the
+  // other KW buckets above.
+  symptom: [
+    "ไม่สบาย", "ป่วย", "มีไข้", "ตัวร้อน", "ไข้สูง", "ไข้ขึ้น",
+    "ท้องเสีย", "ถ่ายเหลว", "อาเจียนบ่อย", "อาเจียน",
+    "ผื่นขึ้น", "มีผื่น", "ผื่นแดง",
+    "ไอมาก", "ไอบ่อย", "ไอแห้ง", "ไอมีเสมหะ", "เด็กไอ",
+    "มีน้ำมูก", "น้ำมูกไหล",
+    "ปวดท้อง", "ปวดหัว", "ปวดศีรษะ",
+    "ซึมลง", "ซึมมาก", "ตัวซึม",
+    "ไม่ดื่มนม", "ไม่กินนม", "ไม่ยอมกินนม",
+    "หายใจลำบาก", "หายใจติดขัด", "หายใจเร็ว",
+    "ท้องผูก", "มีแผล", "แผลติดเชื้อ",
+    "ตัวบวม", "หน้าบวม",
+    "คันตามตัว", "มีอาการคัน",
+    "ตุ่มใส", "มีตุ่ม",
+    "เจ็บคอ", "เจ็บตา", "เจ็บหู",
+  ],
+  // Non-vaccine product/supply stock questions (milk, medicine, diapers).
+  // Full-phrase entries only, same reasoning as `symptom` above.
+  productStock: [
+    "นมมีไหม", "มีนมไหม", "นมมีหรือเปล่า", "นมมีรึเปล่า", "มีนมขาย", "นมมีขายไหม",
+    "สต็อกนม", "มีสต็อกนม",
+    "มียาไหม", "ยามีไหม", "สต็อกยา", "มีสต็อกยา", "มียาเด็กไหม", "ยาเด็กมีไหม",
+    "เวชภัณฑ์มีไหม", "มีเวชภัณฑ์ไหม",
+    "ผ้าอ้อมมีไหม", "มีผ้าอ้อมไหม",
+    "ของใช้เด็กมีไหม", "มีของใช้เด็กไหม",
+  ],
 };
 
 export function parseAgeMonths(text: string): number | null {
@@ -88,6 +123,12 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.holidays))   return { intent: "HOLIDAYS", text };
   if (has(text, KW.news))       return { intent: "NEWS", text };
   if (has(text, KW.contact))    return { intent: "CONTACT", text };
+
+  // Checked before resolveVaccineGroup() on purpose: a symptom sentence naming a
+  // disease that also happens to be a vaccine_aliases entry (e.g. "มือเท้าปาก")
+  // must not be swallowed by the vaccine-question path below.
+  if (has(text, KW.symptom))      return { intent: "MEDICAL_QUESTION", text };
+  if (has(text, KW.productStock)) return { intent: "PRODUCT_STOCK_INQUIRY", text };
 
   const group = await resolveVaccineGroup(text);
   const ageMonths = parseAgeMonths(text);
