@@ -121,9 +121,6 @@ function extractSpecificDayOfMonth(text: string): number | null {
   return day >= 1 && day <= 31 ? day : null;
 }
 
-const CLINIC_STATUS_WORDS = ["เปิด", "ปิด", "หยุด", "ไปทัน", "เข้าได้", "มาทัน"];
-const hasClinicStatusWord = (t: string) => CLINIC_STATUS_WORDS.some((w) => t.includes(w));
-
 // Must use full month names/abbreviations, never bare "เดือน" — otherwise age
 // questions like "วัคซีน 2 เดือน" would be misread as a date reference.
 const THAI_MONTH_TOKENS =
@@ -158,8 +155,12 @@ export async function detectIntent(message: string): Promise<IntentResult> {
 
   // Checked before the generic KW.status match below, which would otherwise catch
   // these via a bare "เปิดไหม"/"ปิดไหม" and wrongly answer with *today's* status.
+  // No open/close word required here — CLINIC_DATE_UNCLEAR's own redirect message
+  // tells the user to type exactly "วันที่ 12" with nothing else, so a bare
+  // "วันที่ N" must be enough on its own (a live-test bug: it wasn't, and matching
+  // digits with nothing else fell all the way through to FALLBACK_MESSAGE).
   const specificDay = extractSpecificDayOfMonth(text);
-  if (specificDay !== null && hasClinicStatusWord(text)) {
+  if (specificDay !== null) {
     return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, specificDay };
   }
   if (isClinicDateUnclear(text)) {
