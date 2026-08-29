@@ -99,6 +99,44 @@ async function closuresSummaryText(): Promise<string> {
   return [weekly, list].filter(Boolean).join("\n\n");
 }
 
+const ymdOf = (d: Date): string => d.toISOString().slice(0, 10);
+
+/** "🟢 เปิดทำการอีกครั้ง ..." line for the nearest open day within 2 weeks after
+ *  `fromDate`, or null if none (shared by CLINIC_STATUS and the specific-date case
+ *  below — both need "when's the next open day" after finding a closed date). */
+async function nextOpenDateLine(fromDate: Date): Promise<string | null> {
+  for (let i = 1; i <= 14; i++) {
+    const d = new Date(fromDate.getTime() + i * 86400000);
+    const st = await getClinicStatus(ymdOf(d));
+    if (st.isOpen) {
+      const dateLine = st.text.split("\n")[0]?.replace(/ คลินิกเปิดค่ะ.*/, "") ?? "";
+      return `🟢 เปิดทำการอีกครั้ง ${dateLine}`;
+    }
+  }
+  return null;
+}
+
+// Ported from resolveUpcomingDateByDayOfMonth_ (old Apps Script, MessageBuilder.gs.js)
+// — day-of-month N -> nearest real date (today counts), rolling to next month if
+// this month's Nth day already passed or doesn't exist (e.g. day=30 in February).
+// `bangkokNow` must come from `new Date(Date.now() + 7*3600*1000)` and is read with
+// getUTC*/Date.UTC only (matches clinicStatus.ts's bangkokToday()) so this is
+// correct regardless of the server's actual timezone.
+function resolveUpcomingDateByDayOfMonth(day: number, bangkokNow: Date): Date | null {
+  const y = bangkokNow.getUTCFullYear();
+  const m = bangkokNow.getUTCMonth();
+  const todayMs = Date.UTC(y, m, bangkokNow.getUTCDate());
+
+  const forMonthOffset = (offset: number): Date | null => {
+    const candidate = new Date(Date.UTC(y, m + offset, day));
+    return candidate.getUTCDate() === day ? candidate : null;
+  };
+
+  const thisMonth = forMonthOffset(0);
+  if (thisMonth && thisMonth.getTime() >= todayMs) return thisMonth;
+  return forMonthOffset(1);
+}
+
 export type Channel = "line" | "messenger";
 
 export async function buildReplyMessages(text: string, channel: Channel): Promise<TextMessage[]> {
@@ -152,20 +190,12 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
       const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
-      const ymdOf = (d: Date) => d.toISOString().slice(0, 10);
       const today = await getClinicStatus(ymdOf(now));
       const parts: string[] = [(today.isOpen ? "🟢 " : "🔴 ") + `วันนี้ ${today.text}`];
 
       if (!today.isOpen) {
-        for (let i = 1; i <= 14; i++) {
-          const d = new Date(now.getTime() + i * 86400000);
-          const st = await getClinicStatus(ymdOf(d));
-          if (st.isOpen) {
-            const dateLine = st.text.split("\n")[0]?.replace(/ คลินิกเปิดค่ะ.*/, "") ?? "";
-            parts.push(`🟢 เปิดทำการอีกครั้ง ${dateLine}`);
-            break;
-          }
-        }
+        const line = await nextOpenDateLine(now);
+        if (line) parts.push(line);
       }
 
       const tomorrow = await getClinicStatus(ymdOf(new Date(now.getTime() + 86400000)));
@@ -176,6 +206,40 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
 
       return [{ type: "text", text: parts.join("\n\n") }];
     }
+    // Ported from CLINIC_STATUS_SPECIFIC_DATE (old Apps Script) — "วันที่ N เปิดไหม".
+    // getClinicStatus() already handles any target date correctly (clinic_hours +
+    // closures), so this only needed the day-of-month -> nearest-real-date math above.
+    case "CLINIC_STATUS_SPECIFIC_DATE": {
+      const now = new Date(Date.now() + 7 * 3600 * 1000);
+      const target = resolveUpcomingDateByDayOfMonth(r.specificDay!, now);
+      if (!target) {
+        return [{
+          type: "text",
+          text: `ขออภัยค่ะ ไม่พบวันที่ ${r.specificDay} ในเดือนนี้หรือเดือนหน้าค่ะ กรุณาตรวจสอบวันที่อีกครั้งนะคะ`,
+        }];
+      }
+      const status = await getClinicStatus(ymdOf(target));
+      const parts: string[] = [(status.isOpen ? "🟢 " : "🔴 ") + status.text];
+      if (!status.isOpen) {
+        const line = await nextOpenDateLine(target);
+        if (line) parts.push(line);
+      }
+      return [{ type: "text", text: parts.join("\n\n") }];
+    }
+    // Ported from CLINIC_DATE_UNCLEAR (old Apps Script) — a weekday/month name said
+    // without the "วันที่ N" format above (e.g. "วันอังคารเปิดไหม"). Redirects instead
+    // of guessing, which used to silently answer with *today's* status regardless of
+    // which day was actually asked about.
+    case "CLINIC_DATE_UNCLEAR":
+      return [{
+        type: "text",
+        text:
+          "รบกวนระบุวันที่อีกครั้งนะคะ เพื่อให้เช็คได้ตรงวันค่ะ 😊\n\n" +
+          "📅 พิมพ์ว่า \"วันที่ 12\" (ใส่เฉพาะตัวเลขวันที่)\n" +
+          "    ระบบจะเช็ควันที่ใกล้ที่สุดให้ พร้อมบอกวันหยุดพิเศษด้วยค่ะ\n\n" +
+          "หรือถ้าต้องการเช็ควันนี้/พรุ่งนี้\n" +
+          "    พิมพ์ว่า \"วันนี้เปิดมั้ย\" หรือ \"พรุ่งนี้เปิดมั้ย\" ได้เลยค่ะ",
+      }];
     case "LOCATION": {
       const [maps, addr] = await Promise.all([config("GOOGLE_MAPS"), config("ADDRESS")]);
       return [{
@@ -185,22 +249,26 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       }];
     }
     case "APPOINTMENT_CHANGE": {
-      // The old text ("ต้องการตรวจสอบ/เลื่อนนัดใช่ไหมคะ") implied the bot could
-      // process a reschedule just from a phone number — it can't; booking.ts only
-      // creates new bookings, nothing here ever modifies an existing appointment.
-      // That was especially misleading for a *narrative* message ("มีนัดวันที่ 14
-      // แต่ติดธุระเลยไปวันเสาร์แทนค่ะ") which this same keyword bucket also catches
-      // (see intent.ts KW.apptChange's "นัด" entry) — the old reply ignored what
-      // the user just said and asked them to start over. This version is honest
-      // about what chat can and can't do: real changes need the clinic directly.
+      // Ported verbatim from buildAppointmentChangeReply() (old Apps Script,
+      // MessageBuilder.gs.js) per explicit instruction to keep the original
+      // wording exactly ("พาน้องมา", not "ติดต่อคลินิก") — proven rule-based
+      // guidance, replacing the old system's placeholder-short "โทรติดต่อคลินิก".
+      // booking.ts still only creates new bookings (no reschedule endpoint), so
+      // this is guidance/next-steps text, not something the bot resolves itself.
       //
-      // Split by channel: LINE already has a "เช็คนัดหมาย" Rich Menu button, so
-      // repeating the phone-number instructions here is redundant. Messenger has
-      // no phone-check flow at all (LIFF booking only opens inside LINE), so it
-      // gets a nudge toward the LINE OA instead of a dead-end.
+      // Channel-split kept as agreed: LINE already has a "เช็คนัดหมาย" Rich Menu
+      // button, so the guidance stands alone. Messenger has no phone-check flow
+      // at all (LIFF booking only opens inside LINE), so it also gets a nudge
+      // toward the LINE OA.
       const phone = (await config("PHONE")) ?? "085-065-9715";
       const base =
-        `รับทราบค่ะ 🗓️ หากต้องการเลื่อน/เปลี่ยนแปลงนัดหมาย รบกวนติดต่อเจ้าหน้าที่คลินิกโดยตรงเพื่อยืนยันการเปลี่ยนแปลงนะคะ ☎️ ${phone}`;
+        "📅 กรณีเปลี่ยนวันนัดหรือมาช้ากว่านัด\n\n" +
+        "หากไม่สะดวกมาตามวันนัดเดิม โดยทั่วไปสามารถพาน้องมาหลังวันนัดเดิมได้ค่ะ\n\n" +
+        "สำหรับการรับวัคซีน ไม่แนะนำให้มาก่อนวันนัด เนื่องจากระยะห่างของวัคซีนอาจยังไม่ครบตามเกณฑ์\n\n" +
+        "หากพลาดวันนัดแล้ว แนะนำให้พาน้องมาโดยเร็วที่สุดในวันที่สะดวกค่ะ\n\n" +
+        "เมื่อมาถึงคลินิก แพทย์จะตรวจสอบประวัติและวางแผนการรับวัคซีนที่เหมาะสมให้อีกครั้ง\n\n" +
+        "หากไม่แน่ใจ สามารถโทรสอบถามคลินิกในเวลาทำการได้ค่ะ\n\n" +
+        `☎️ ${phone}`;
       if (channel === "line") {
         return [{ type: "text", text: base }];
       }

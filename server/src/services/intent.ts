@@ -4,6 +4,8 @@ import { env } from "../lib/env";
 export type Intent =
   | "APPOINTMENT_CHANGE"
   | "CLINIC_STATUS"
+  | "CLINIC_STATUS_SPECIFIC_DATE"
+  | "CLINIC_DATE_UNCLEAR"
   | "CLINIC_TIME"
   | "LOCATION"
   | "VACCINE_PRICE"
@@ -26,6 +28,7 @@ export interface IntentResult {
   text: string;
   vaccineGroup?: string;   // resolved from vaccine_aliases when relevant
   ageMonths?: number | null;
+  specificDay?: number;    // 1-31, set only for CLINIC_STATUS_SPECIFIC_DATE
 }
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -107,12 +110,62 @@ async function resolveVaccineGroup(text: string): Promise<string | undefined> {
   return hit?.group_code;
 }
 
+// ---- Specific-date / weekday-name status questions ----
+// Ported from IntentEngine.js (old Apps Script): extractSpecificDayOfMonth_,
+// isSpecificDateStatusIntent_, isClinicDateUnclearIntent_.
+
+function extractSpecificDayOfMonth(text: string): number | null {
+  const match = text.match(/วันที่\s*(\d{1,2})/);
+  if (!match) return null;
+  const day = Number(match[1]);
+  return day >= 1 && day <= 31 ? day : null;
+}
+
+const CLINIC_STATUS_WORDS = ["เปิด", "ปิด", "หยุด", "ไปทัน", "เข้าได้", "มาทัน"];
+const hasClinicStatusWord = (t: string) => CLINIC_STATUS_WORDS.some((w) => t.includes(w));
+
+// Must use full month names/abbreviations, never bare "เดือน" — otherwise age
+// questions like "วัคซีน 2 เดือน" would be misread as a date reference.
+const THAI_MONTH_TOKENS =
+  /(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.|มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/;
+const THAI_WEEKDAY_TOKENS = /(วันจันทร์|วันอังคาร|วันพุธ|วันพฤหัส|วันศุกร์|วันเสาร์|วันอาทิตย์)/;
+
+// A weekday/month name said WITHOUT the "วันที่ N" format above (e.g.
+// "วันอังคารเปิดไหม", "วันพุธที่ 12 ส.ค. เปิดมั้ย") — these used to fall through to
+// the generic KW.status match below and get answered with *today's* status
+// regardless of which day was actually asked about.
+function isClinicDateUnclear(text: string): boolean {
+  if (extractSpecificDayOfMonth(text) !== null) return false;
+  if (/(วันนี้|พรุ่งนี้|มะรืน)/.test(text)) return false;
+
+  const hasMonth = THAI_MONTH_TOKENS.test(text);
+  const hasWeekday = THAI_WEEKDAY_TOKENS.test(text);
+  if (!hasMonth && !hasWeekday) return false;
+
+  const hasOpenCloseWord = /(เปิด|ปิด|หยุด)/.test(text);
+  // Weekday names use a stricter rule (open/close word required) so this doesn't
+  // steal a general schedule question like "เวลาทำการวันจันทร์" from CLINIC_TIME.
+  if (hasWeekday && !hasMonth) return hasOpenCloseWord;
+  return hasOpenCloseWord || /(กี่โมง|เวลา)/.test(text);
+}
+
 export async function detectIntent(message: string): Promise<IntentResult> {
   const text = norm(message);
   if (!text) return { intent: "UNKNOWN", text };
 
   if (has(text, KW.booking))    return { intent: "BOOKING_MENU", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
+
+  // Checked before the generic KW.status match below, which would otherwise catch
+  // these via a bare "เปิดไหม"/"ปิดไหม" and wrongly answer with *today's* status.
+  const specificDay = extractSpecificDayOfMonth(text);
+  if (specificDay !== null && hasClinicStatusWord(text)) {
+    return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, specificDay };
+  }
+  if (isClinicDateUnclear(text)) {
+    return { intent: "CLINIC_DATE_UNCLEAR", text };
+  }
+
   if (has(text, KW.status))     return { intent: "CLINIC_STATUS", text };
   if (has(text, KW.time))       return { intent: "CLINIC_TIME", text };
   if (has(text, KW.location))   return { intent: "LOCATION", text };
