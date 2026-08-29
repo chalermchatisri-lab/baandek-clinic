@@ -3,7 +3,7 @@ import { env } from "../lib/env";
 import { detectIntent } from "./intent";
 import { buildVaccineAdvice, DOCTOR_REFERRAL } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
-import { buildAppointmentResultByPhone, normalizePhone } from "./appointmentCheck";
+import { buildAppointmentResultByPhone } from "./appointmentCheck";
 
 export type TextMessage = { type: "text"; text: string; quickReply?: unknown };
 
@@ -21,9 +21,30 @@ async function config(key: string): Promise<string | null> {
   return data?.value ?? null;
 }
 
-function looksLikePhone(text: string): boolean {
-  const d = text.replace(/\D/g, "");
-  return d.length >= 9 && d.length <= 11 && /^[0\s\-()+\d]+$/.test(text.trim());
+const INCOMPLETE_PHONE_MESSAGE =
+  "ขออภัยค่ะ เบอร์โทรศัพท์ที่พิมพ์มายังไม่ครบ 10 หลักค่ะ 🙏\n" +
+  "กรุณาตรวจสอบเลขหมายอีกครั้ง แล้วพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) ให้ครบถ้วนนะคะ\n" +
+  "☎️ หากต้องการความช่วยเหลือ ติดต่อคลินิกได้ที่ 085-065-9715";
+
+// A message made up only of digits/spaces/dashes/parens/plus (no other text) is the
+// user attempting to answer the "พิมพ์เบอร์โทร (10 หลัก)" prompt — regardless of how
+// many digits, so a too-short/too-long attempt still lands here instead of leaking
+// into the generic intent fallback (previously: <9 or >11 digits missed this gate
+// entirely and fell through to detectIntent()).
+function looksLikePhoneAttempt(text: string): boolean {
+  const trimmed = text.trim();
+  return /\d/.test(trimmed) && /^[0\s\-()+\d]+$/.test(trimmed);
+}
+
+// A *complete* phone is exactly 10 digits, or the "66" + 9-digit international
+// form. Anything else digit-shaped (9 digits from a dropped leading zero, 11
+// random digits, etc.) used to slip through normalizePhone()'s lenient
+// auto-correction, get queried anyway, and come back "ไม่พบนัดหมาย" — which told
+// the user their registered number wasn't on file when the real problem was a
+// mistyped/incomplete number.
+function isCompletePhone(text: string): boolean {
+  const digits = text.replace(/\D/g, "");
+  return digits.length === 10 || (digits.length === 11 && digits.startsWith("66"));
 }
 
 const TH_DAY: Record<string, string> = {
@@ -62,7 +83,10 @@ async function closuresSummaryText(): Promise<string> {
 
 export async function buildReplyMessages(text: string): Promise<TextMessage[]> {
   // Fast path: a lone phone number = user answering the appointment prompt.
-  if (looksLikePhone(text) && normalizePhone(text)) {
+  if (looksLikePhoneAttempt(text)) {
+    if (!isCompletePhone(text)) {
+      return [{ type: "text", text: INCOMPLETE_PHONE_MESSAGE }];
+    }
     const r = await buildAppointmentResultByPhone(text);
     return [{ type: "text", text: r.text }];
   }
