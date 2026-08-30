@@ -290,6 +290,24 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
               (maps ? `\n\nเปิดเส้นทางใน Google Maps:\n${maps}` : ""),
       }];
     }
+    case "APPOINTMENT_CHECK": {
+      // The "เช็คนัดหมาย" booking-menu button (and natural "เช็คนัด"/"ตรวจสอบนัด"
+      // phrasings) land here. Deliberately stateless: we just prompt for a phone
+      // number, and the looksLikePhoneAttempt fast-path at the top of
+      // buildReplyMessages() picks up whatever number the user sends next and runs
+      // buildAppointmentResultByPhone(). A bare phone number is unambiguous enough to
+      // route on its own, so there's no need to track who was asked (matches the
+      // old Cloudflare Worker's flow minus its awaiting-phone KV state).
+      const base =
+        "กรุณาพิมพ์เบอร์โทรศัพท์ที่ลงทะเบียนนัดหมายไว้ (10 หลัก) ค่ะ 📱\n\n" +
+        "ระบบจะตรวจสอบนัดหมายที่กำลังจะถึงให้นะคะ\n\n" +
+        "⚠️ ระบบค้นหาด้วยเบอร์โทรศัพท์ กรุณาตรวจสอบว่าเบอร์ถูกต้อง เผื่อกรณีเบอร์ถูกส่งต่อ/เปลี่ยนมือ อาจแสดงข้อมูลของผู้อื่นได้";
+      // LINE-only UI hint: on LINE the keyboard is often collapsed behind the Rich
+      // Menu, so parents don't see where to type. Irrelevant on Messenger.
+      const lineHint =
+        "\n\nหากไม่เห็นช่องพิมพ์ข้อความ กรุณากดไอคอนคีย์บอร์ด ⌨️ ที่มุมซ้ายล่างก่อนนะคะ";
+      return [{ type: "text", text: channel === "line" ? base + lineHint : base }];
+    }
     case "APPOINTMENT_CHANGE": {
       // Ported verbatim from buildAppointmentChangeReply() (old Apps Script,
       // MessageBuilder.gs.js) per explicit instruction to keep the original

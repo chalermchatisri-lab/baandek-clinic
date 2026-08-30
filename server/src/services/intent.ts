@@ -3,6 +3,7 @@ import { env } from "../lib/env";
 
 export type Intent =
   | "APPOINTMENT_CHANGE"
+  | "APPOINTMENT_CHECK"
   | "CLINIC_STATUS"
   | "CLINIC_STATUS_SPECIFIC_DATE"
   | "CLINIC_DATE_UNCLEAR"
@@ -41,10 +42,17 @@ const KW = {
   status: ["เปิดไหม", "ปิดไหม", "หยุดไหม", "วันนี้เปิด", "ยังเปิด", "ไปทัน", "เปิด-ปิดวันนี้", "เปิดปิด", "เช็ควันทำการ"],
   time: ["เวลาทำการ", "เวลาเปิด", "กี่โมง", "ตารางเวลา"],
   location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
-  // "นัด" added broadly on purpose: catches "จะนัดฉีดวัคซีนได้ไหม", "ขอนัดหน่อย" etc.
+  // "Check my appointment" — MUST be tested before apptChange (see detectIntent).
+  // The booking-menu quick-reply button sends exactly "เช็คนัดหมาย", which contains
+  // both "เช็คนัด" and "นัด"; those used to live in apptChange, so the button
+  // dead-ended on APPOINTMENT_CHANGE (reschedule guidance) instead of prompting for
+  // a phone number — the live bug after the LINE cutover. These check-phrasings now
+  // belong here; the reschedule/"can't make it" phrasings stay in apptChange below.
+  apptCheck: ["เช็คนัดหมาย", "เช็คนัด", "ตรวจสอบนัด", "เช็คคิว", "ดูนัด"],
+  // "นัด" kept here on purpose: catches "จะนัดฉีดวัคซีนได้ไหม", "ขอนัดหน่อย" etc.
   // Without it, these fall through to the generic "วัคซีน" bucket below and get
   // misanswered as a price/info question instead of routed to appointment flow.
-  apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด", "เช็คนัด", "ตรวจสอบนัด", "เช็คคิว", "นัด"],
+  apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด", "นัด"],
   services: ["บริการ"],
   holidays: ["วันหยุด", "ปิดยาว", "หยุดยาว", "หยุดคลินิก"],
   news: ["ข่าวสาร", "ข่าว"],
@@ -151,6 +159,9 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (!text) return { intent: "UNKNOWN", text };
 
   if (has(text, KW.booking))    return { intent: "BOOKING_MENU", text };
+  // apptCheck before apptChange: "เช็คนัดหมาย" (the booking-menu button payload)
+  // contains "นัด", which apptChange also matches — order decides the winner.
+  if (has(text, KW.apptCheck))  return { intent: "APPOINTMENT_CHECK", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
 
   // Checked before the generic KW.status match below, which would otherwise catch
