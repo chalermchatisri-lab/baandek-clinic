@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages, MEDICAL_QUESTION_ATTACHMENT_MESSAGE } from "../services/reply";
+import { buildReplyMessages, buildMedicalQuestionAttachmentMessage } from "../services/reply";
 
 export const line = new Hono();
 
@@ -16,8 +16,12 @@ async function verify(raw: string, sig: string | undefined): Promise<boolean> {
   return b64 === sig;
 }
 
+// *** แก้ 2026-08-30 ***: เดิมไม่เช็ค response.ok เลย — ถ้า LINE Reply API ปฏิเสธ request
+// (เช่น replyToken หมดอายุ, token ผิด, rate limit) โค้ดจะไม่รู้เลยและไม่มี log ใดๆ ทั้งสิ้น
+// ผู้ปกครองก็ไม่ได้คำตอบ แต่ log ก็ไม่มีร่องรอยให้ debug ย้อนหลังได้ — เพิ่ม log อย่างเดียว
+// (ไม่ได้เพิ่ม retry เพราะ replyToken ใช้ได้ครั้งเดียวอยู่แล้ว ยิงซ้ำไม่ช่วยอะไร)
 async function reply(replyToken: string, messages: unknown[]) {
-  await fetch("https://api.line.me/v2/bot/message/reply", {
+  const res = await fetch("https://api.line.me/v2/bot/message/reply", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -25,6 +29,9 @@ async function reply(replyToken: string, messages: unknown[]) {
     },
     body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }),
   });
+  if (!res.ok) {
+    console.error(`LINE reply API failed: HTTP ${res.status}`, await res.text().catch(() => ""));
+  }
 }
 
 line.post("/webhook/line", async (c) => {
@@ -37,13 +44,24 @@ line.post("/webhook/line", async (c) => {
     (body.events ?? [])
       .filter((e) => e.type === "message" && e.replyToken)
       .map(async (e) => {
-        // Non-text message events (image/sticker/video/audio/file/location) used
-        // to be filtered out above and get zero reply — worst case: a parent
-        // sends a photo of their sick child and hears nothing back at all.
-        if (e.message?.type !== "text") {
-          return reply(e.replyToken, [{ type: "text", text: MEDICAL_QUESTION_ATTACHMENT_MESSAGE }]);
+        try {
+          // Non-text message events (image/sticker/video/audio/file/location) used
+          // to be filtered out above and get zero reply — worst case: a parent
+          // sends a photo of their sick child and hears nothing back at all.
+          if (e.message?.type !== "text") {
+            return await reply(e.replyToken, [{ type: "text", text: await buildMedicalQuestionAttachmentMessage() }]);
+          }
+          return await reply(e.replyToken, await buildReplyMessages(String(e.message.text), "line"));
+        } catch (err) {
+          // *** แก้ 2026-08-30 ***: ชั้นสุดท้ายจริงๆ — buildReplyMessages() มี try/catch
+          // ของตัวเองแล้ว (ไม่ควร throw มาถึงตรงนี้ได้) แต่ครอบอีกชั้นด้วยข้อความ hardcode
+          // ล้วนๆ (ไม่พึ่ง config()/Supabase เลยแม้แต่น้อย) เพื่อยืนยันว่า "ห้ามเงียบเด็ดขาด"
+          // เป็นจริงไม่ว่าอะไรจะพังก่อนหน้านี้
+          console.error("LINE webhook: unexpected error building/sending reply", err);
+          await reply(e.replyToken, [
+            { type: "text", text: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาโทรติดต่อคลินิกโดยตรงค่ะ ☎️ 085-065-9715" },
+          ]);
         }
-        return reply(e.replyToken, await buildReplyMessages(String(e.message.text), "line"));
       }),
   );
   return c.text("OK");

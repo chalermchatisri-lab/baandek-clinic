@@ -68,12 +68,24 @@ const KW = {
   // "ไอ" or "ยา" that collide with unrelated words (e.g. "ยา" is a substring of the
   // very common "อยาก") — every entry is a full phrase, matching the style of the
   // other KW buckets above.
+  //
+  // *** แก้ 2026-08-30 ***: ทดสอบจริงบน FB Messenger "ลูกไข้ 38 องศาทำให้ดี" ไม่ตอบอะไร
+  // เลย เพราะไม่มีคำไหนในลิสต์เดิม match — bare "ไข้"/"แพ้"/"จาม" เพิ่มเข้ามาใหม่ (คำอาการ
+  // สั้นๆ ที่ผู้ปกครองพิมพ์จริง) "ไข้" ต่างจาก "ไอ"/"ยา" ตรงที่ไม่พบว่าชนกับคำไทยทั่วไปคำไหน
+  // จึงปลอดภัยกว่าจะเปิดเป็น bare token ส่วน "ไอ" ยังคงเป็น full-phrase เท่านั้นเหมือนเดิม
+  // (เสี่ยงชนกับ "ไอศกรีม"/"ไอเดีย"/"ไอโฟน" ฯลฯ) เพิ่มคำถามปลายเปิด "ทำไงดี"/"ทำยังไงดี"/
+  // "ทำอย่างไรดี"/"ควรทำยังไง"/"ทำให้ดี" ด้วย — คำเหล่านี้ทั่วไปพอที่จะจับคำถามนอกเรื่องได้
+  // บ้าง (เช่น "จ่ายเงินยังไงดี" ที่ไม่มีคำ intent อื่นนำหน้ามาก่อน) แต่ยอมรับ trade-off นี้
+  // เพราะ priority ในการ route (บริการ/นัด/ราคา/ฯลฯ) เช็คก่อนหน้าอยู่แล้ว และตอนนี้ทุก
+  // ข้อความมี safety-net fallback รองรับเสมอ (ดู reply.ts) พลาดเป็น MEDICAL_QUESTION ยังดี
+  // กว่าพลาดเป็นความเงียบเหมือนเคส 2026-08-30
   symptom: [
-    "ไม่สบาย", "ป่วย", "มีไข้", "ตัวร้อน", "ไข้สูง", "ไข้ขึ้น",
+    "ไม่สบาย", "ป่วย", "ไข้", "มีไข้", "ตัวร้อน", "ไข้สูง", "ไข้ขึ้น",
     "ท้องเสีย", "ถ่ายเหลว", "อาเจียนบ่อย", "อาเจียน",
-    "ผื่นขึ้น", "มีผื่น", "ผื่นแดง",
+    "ผื่น", "ผื่นขึ้น", "มีผื่น", "ผื่นแดง",
+    "แพ้", "จาม",
     "ไอมาก", "ไอบ่อย", "ไอแห้ง", "ไอมีเสมหะ", "เด็กไอ",
-    "มีน้ำมูก", "น้ำมูกไหล",
+    "น้ำมูก", "มีน้ำมูก", "น้ำมูกไหล",
     "ปวดท้อง", "ปวดหัว", "ปวดศีรษะ",
     "ซึมลง", "ซึมมาก", "ตัวซึม",
     "ไม่ดื่มนม", "ไม่กินนม", "ไม่ยอมกินนม",
@@ -83,6 +95,7 @@ const KW = {
     "คันตามตัว", "มีอาการคัน",
     "ตุ่มใส", "มีตุ่ม",
     "เจ็บคอ", "เจ็บตา", "เจ็บหู",
+    "ทำไงดี", "ทำยังไงดี", "ทำอย่างไรดี", "ควรทำยังไง", "ทำให้ดี",
   ],
   // Non-vaccine product/supply stock questions (milk, medicine, diapers).
   // Full-phrase entries only, same reasoning as `symptom` above.
@@ -96,6 +109,12 @@ const KW = {
   ],
 };
 
+// จับ "ตัวเลข + องศา" (เช่น "38 องศา", "38.5°") แยกจาก KW.symptom เพราะผู้ปกครองมักบอก
+// อุณหภูมิลอยๆ โดยไม่มีคำอื่นที่ list ด้านบนจับได้เลย (เช่น "ลูกไข้ 38 องศาทำให้ดี" —
+// เคสจริง 2026-08-30 ที่ทำให้บอทเงียบสนิทบน Messenger) การบอกอุณหภูมิเป็นองศาในบริบท
+// คลินิกเด็กถือเป็นสัญญาณอาการป่วยได้เลยในตัวเอง ไม่ต้องรอคำว่า "ไข้" อยู่ข้างๆ ด้วยซ้ำ
+const TEMPERATURE_READING = /\d+(\.\d+)?\s*(องศา|°c?)/i;
+
 export function parseAgeMonths(text: string): number | null {
   const t = norm(text);
   const y = t.match(/(\d+)\s*(?:ปี|ขวบ)/);
@@ -107,15 +126,28 @@ export function parseAgeMonths(text: string): number | null {
 
 // Alias lookup replaces the giant hardcoded AI_ALIAS regex.
 // Indexed table (vaccine_aliases) + trigram = resilient to new phrasings.
+//
+// *** แก้ 2026-08-30 ***: ฟังก์ชันนี้ถูกเรียกแบบไม่มีเงื่อนไขสำหรับ "ทุกข้อความที่ไม่ตรง
+// keyword bucket ไหนเลยด้านบน" (ดู detectIntent ท้ายไฟล์) เดิมไม่มี try/catch ล้อม
+// admin.from() เลย — ถ้า Supabase สะดุดแม้แค่ชั่วคราว (network blip, timeout) exception
+// จะลอยขึ้นไปทะลุ detectIntent -> buildReplyMessages -> route handler ที่ไม่มี try/catch
+// เหมือนกัน (line.ts/messenger.ts) จบที่ reply()/send() ไม่ถูกเรียกเลย = ผู้ปกครองไม่ได้รับ
+// คำตอบอะไรทั้งสิ้น นี่คือสาเหตุที่เป็นไปได้มากที่สุดของเคสเงียบจริงบน Messenger — ครอบ
+// try/catch ให้ล้มแบบปลอดภัย (คืน undefined เหมือนไม่พบ group) แทนที่จะปล่อยให้พังทั้งสาย
 async function resolveVaccineGroup(text: string): Promise<string | undefined> {
   const t = norm(text);
-  const { data } = await admin.from("vaccine_aliases").select("alias, group_code");
-  if (!data) return undefined;
-  // longest alias that appears in the text wins (avoids "pcv" stealing "pcv13")
-  const hit = data
-    .filter((r) => t.includes(r.alias))
-    .sort((a, b) => b.alias.length - a.alias.length)[0];
-  return hit?.group_code;
+  try {
+    const { data } = await admin.from("vaccine_aliases").select("alias, group_code");
+    if (!data) return undefined;
+    // longest alias that appears in the text wins (avoids "pcv" stealing "pcv13")
+    const hit = data
+      .filter((r) => t.includes(r.alias))
+      .sort((a, b) => b.alias.length - a.alias.length)[0];
+    return hit?.group_code;
+  } catch (err) {
+    console.error("resolveVaccineGroup: Supabase query failed, falling back to no-group", err);
+    return undefined;
+  }
 }
 
 // ---- Specific-date / weekday-name status questions ----
@@ -191,8 +223,11 @@ export async function detectIntent(message: string): Promise<IntentResult> {
 
   // Checked before resolveVaccineGroup() on purpose: a symptom sentence naming a
   // disease that also happens to be a vaccine_aliases entry (e.g. "มือเท้าปาก")
-  // must not be swallowed by the vaccine-question path below.
-  if (has(text, KW.symptom))      return { intent: "MEDICAL_QUESTION", text };
+  // must not be swallowed by the vaccine-question path below. TEMPERATURE_READING
+  // checked in the same slot — a bare "38 องศา" is medical context on its own even
+  // with zero KW.symptom words nearby (see TEMPERATURE_READING comment above).
+  if (has(text, KW.symptom) || TEMPERATURE_READING.test(text))
+    return { intent: "MEDICAL_QUESTION", text };
   if (has(text, KW.productStock)) return { intent: "PRODUCT_STOCK_INQUIRY", text };
 
   const group = await resolveVaccineGroup(text);

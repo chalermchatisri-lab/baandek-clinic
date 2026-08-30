@@ -14,30 +14,82 @@ function thaiDate(ymd: string): string {
   return `${d.getDate()} ${TH_MON[d.getMonth()]} ${d.getFullYear() + 543}`;
 }
 
+// เบอร์คลินิกสำรอง ใช้เฉพาะกรณี clinic_config อ่านไม่สำเร็จ/ยังไม่มีค่า — ต้องตรงกับ
+// fallback เดิมที่ใช้ใน APPOINTMENT_CHANGE ด้านล่าง (ค่าเดียวกันทั้งไฟล์)
+const CLINIC_PHONE_FALLBACK = "085-065-9715";
+
 /** One reply brain for every channel — replaces the old system's 5 duplicated
- *  buildClinicMessageForLine/Messenger/Facebook/... builders. */
+ *  buildClinicMessageForLine/Messenger/Facebook/... builders.
+ *
+ *  *** แก้ 2026-08-30 ***: เดิมไม่มี try/catch ล้อม admin.from() เลย — ถ้า Supabase
+ *  สะดุด exception จะทะลุขึ้นไปทั้งสาย (buildReplyMessages -> route handler ที่ไม่มี
+ *  try/catch เหมือนกัน) จบที่ไม่ตอบอะไรกลับผู้ใช้เลย ทุก case ที่เรียก config() (SERVICES/
+ *  CONTACT/APPOINTMENT_CHANGE/ฯลฯ) จะพังแบบเงียบๆ ได้หมดถ้า Supabase มีปัญหาชั่วคราว —
+ *  ครอบ try/catch คืน null แทนการปล่อยให้พังทั้งสาย (ผู้เรียกทุกจุดมี ?? fallback อยู่แล้ว)
+ */
 async function config(key: string): Promise<string | null> {
-  const { data } = await admin.from("clinic_config").select("value").eq("key", key).maybeSingle();
-  return data?.value ?? null;
+  try {
+    const { data } = await admin.from("clinic_config").select("value").eq("key", key).maybeSingle();
+    return data?.value ?? null;
+  } catch (err) {
+    console.error(`config("${key}"): Supabase query failed, falling back to null`, err);
+    return null;
+  }
+}
+
+/** ข้อความ safety-net สุดท้าย — ต้องส่งเสมอเมื่อ (1) detector จับ intent อะไรไม่ได้เลย
+ *  (ตกไป default case) หรือ (2) เกิด exception ระหว่างประมวลผล (ดู buildReplyMessages
+ *  ท้ายไฟล์) ไม่ใช่ error message ทางเทคนิค แต่เป็นข้อความสุภาพที่ชี้ทางให้โทรคลินิก
+ *  โดยเฉพาะกรณีเร่งด่วน/เรื่องอาการ — เบอร์ดึงจาก config เสมอ ไม่ hardcode */
+async function buildSafetyNetMessage(): Promise<string> {
+  let phone = CLINIC_PHONE_FALLBACK;
+  try {
+    phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  } catch {
+    // config() ครอบ try/catch ของตัวเองแล้ว ไม่ควร throw มาถึงตรงนี้ได้เลย — เผื่อไว้
+    // อีกชั้นเพื่อยืนยันว่าฟังก์ชันนี้ "ห้ามพังเด็ดขาด" ไม่ว่าจะเกิดอะไรขึ้นก่อนหน้า
+  }
+  return (
+    "ขอบคุณที่ทักมานะคะ 🙏 ตอนนี้น้องไดโนอาจไม่เข้าใจข้อความนี้ค่ะ " +
+    `หากต้องการสอบถามเร่งด่วนหรือเรื่องอาการของลูกน้อย กรุณาโทร ☎️ ${phone} ได้เลยค่ะ`
+  );
 }
 
 // Used both when a message-type event isn't text (image/sticker/etc. — see
 // line.ts/messenger.ts) and for the MEDICAL_QUESTION intent below. Two variants
 // because the reference text opens with "ขอบคุณที่ส่งรูปมาให้ดูนะคะ" (thanks for
 // the photo), which would be wrong to say back to someone who only typed words.
-export const MEDICAL_QUESTION_ATTACHMENT_MESSAGE =
-  "ขอบคุณที่ส่งรูปมาให้ดูนะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากรูปภาพหรือข้อความได้ค่ะ " +
-  "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
-  "หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ 085-065-9715";
+//
+// *** แก้ 2026-08-30 ***: ทั้ง 3 ข้อความนี้ (รวม INCOMPLETE_PHONE_MESSAGE ด้านล่าง) เดิม
+// hardcode เบอร์ 085-065-9715 ไว้ตรงๆ เป็น const string ไม่ได้ดึงจาก clinic_config เหมือน
+// SERVICES/CONTACT/APPOINTMENT_CHANGE — ถ้าเปลี่ยนเบอร์ผ่าน Dashboard จุดเหล่านี้จะยังโชว์
+// เบอร์เก่าค้าง แปลงเป็น async function ดึงเบอร์จาก config() ทุกครั้งที่เรียก (มี fallback
+// เดียวกันถ้า config ว่าง) — ผู้เรียกใน line.ts/messenger.ts ต้อง await ฟังก์ชันเหล่านี้แทน
+export async function buildMedicalQuestionAttachmentMessage(): Promise<string> {
+  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  return (
+    "ขอบคุณที่ส่งรูปมาให้ดูนะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากรูปภาพหรือข้อความได้ค่ะ " +
+    "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
+    `หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ ${phone}`
+  );
+}
 
-const MEDICAL_QUESTION_TEXT_MESSAGE =
-  "ขอบคุณที่แจ้งอาการมานะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากข้อความได้ค่ะ " +
-  "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
-  "หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ 085-065-9715";
+async function buildMedicalQuestionTextMessage(): Promise<string> {
+  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  return (
+    "ขอบคุณที่แจ้งอาการมานะคะ 🙏 น้องไดโนไม่สามารถวินิจฉัยอาการจากข้อความได้ค่ะ " +
+    "เพื่อความปลอดภัยของน้อง แนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
+    `หากมีอาการรุนแรง เช่น ไข้สูง ซึม ไม่ดื่มนม หายใจลำบาก กรุณารีบพาน้องมาพบแพทย์ทันที หรือโทร ☎️ ${phone}`
+  );
+}
 
-const PRODUCT_STOCK_MESSAGE =
-  "ขอบคุณที่สอบถามนะคะ 🙏 เรื่องสต็อกสินค้า (นม/ยา/เวชภัณฑ์) ขณะนี้ระบบยังไม่สามารถเช็คสต็อกแบบเรียลไทม์ได้ค่ะ " +
-  "กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงเพื่อความชัดเจนก่อนเดินทางมานะคะ ☎️ 085-065-9715 (ในเวลาทำการ)";
+async function buildProductStockMessage(): Promise<string> {
+  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  return (
+    "ขอบคุณที่สอบถามนะคะ 🙏 เรื่องสต็อกสินค้า (นม/ยา/เวชภัณฑ์) ขณะนี้ระบบยังไม่สามารถเช็คสต็อกแบบเรียลไทม์ได้ค่ะ " +
+    `กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงเพื่อความชัดเจนก่อนเดินทางมานะคะ ☎️ ${phone} (ในเวลาทำการ)`
+  );
+}
 
 // Age-picker quick-reply — the entry point when someone asks about vaccines
 // without naming one or giving an age (e.g. bare "วัคซีน"). Each button resends
@@ -62,10 +114,14 @@ const AGE_PICKER_ITEMS = [
 
 const AGE_GROUP_4_TO_12_YEARS = ["48M", "51M", "132M", "138M"];
 
-const INCOMPLETE_PHONE_MESSAGE =
-  "ขออภัยค่ะ เบอร์โทรศัพท์ที่พิมพ์มายังไม่ครบ 10 หลักค่ะ 🙏\n" +
-  "กรุณาตรวจสอบเลขหมายอีกครั้ง แล้วพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) ให้ครบถ้วนนะคะ\n" +
-  "☎️ หากต้องการความช่วยเหลือ ติดต่อคลินิกได้ที่ 085-065-9715";
+async function buildIncompletePhoneMessage(): Promise<string> {
+  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  return (
+    "ขออภัยค่ะ เบอร์โทรศัพท์ที่พิมพ์มายังไม่ครบ 10 หลักค่ะ 🙏\n" +
+    "กรุณาตรวจสอบเลขหมายอีกครั้ง แล้วพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) ให้ครบถ้วนนะคะ\n" +
+    `☎️ หากต้องการความช่วยเหลือ ติดต่อคลินิกได้ที่ ${phone}`
+  );
+}
 
 // A message made up only of digits/spaces/dashes/parens/plus (no other text) is the
 // user attempting to answer the "พิมพ์เบอร์โทร (10 หลัก)" prompt — regardless of how
@@ -163,10 +219,17 @@ function resolveUpcomingDateByDayOfMonth(day: number, bangkokNow: Date): Date | 
 export type Channel = "line" | "messenger";
 
 export async function buildReplyMessages(text: string, channel: Channel): Promise<TextMessage[]> {
+  // *** แก้ 2026-08-30 ***: ครอบทั้งฟังก์ชันด้วย try/catch — ห้ามเงียบเด็ดขาดไม่ว่า
+  // เหตุผลอะไร (detector จับ intent ไม่ได้ก็ตกไป default case ซึ่งตอบเสมออยู่แล้ว แต่ถ้า
+  // เกิด exception ระหว่างทาง เช่น Supabase สะดุดใน resolveVaccineGroup()/config()/
+  // vaccine.ts ฯลฯ เดิมจะทะลุขึ้นไปถึง route handler ที่ไม่มี try/catch เหมือนกัน จบที่ไม่
+  // ส่งอะไรกลับผู้ใช้เลย — เคสจริง 2026-08-30 บน Messenger) ไม่ได้ re-indent โค้ดเดิมด้านใน
+  // ทั้งหมดเพื่อให้ diff เทียบง่าย
+  try {
   // Fast path: a lone phone number = user answering the appointment prompt.
   if (looksLikePhoneAttempt(text)) {
     if (!isCompletePhone(text)) {
-      return [{ type: "text", text: INCOMPLETE_PHONE_MESSAGE }];
+      return [{ type: "text", text: await buildIncompletePhoneMessage() }];
     }
     const r = await buildAppointmentResultByPhone(text);
     return [{ type: "text", text: r.text }];
@@ -226,9 +289,9 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       }];
     }
     case "MEDICAL_QUESTION":
-      return [{ type: "text", text: MEDICAL_QUESTION_TEXT_MESSAGE }];
+      return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
     case "PRODUCT_STOCK_INQUIRY":
-      return [{ type: "text", text: PRODUCT_STOCK_MESSAGE }];
+      return [{ type: "text", text: await buildProductStockMessage() }];
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
       const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
@@ -430,11 +493,18 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       }];
     }
     default: {
+      // *** แก้ 2026-08-30 ***: เปลี่ยน hardcoded ultimate fallback จาก "สวัสดีค่ะ..."
+      // เดิม (ไม่มีเบอร์/ไม่ชี้ทางกรณีเร่งด่วน) เป็น buildSafetyNetMessage() — ยัง
+      // เคารพค่า FALLBACK_MESSAGE ที่ admin ตั้งไว้ใน dashboard เหมือนเดิมถ้ามี
       const fallback = await config("FALLBACK_MESSAGE");
       return [{
         type: "text",
-        text: fallback ?? "สวัสดีค่ะ บ้านเด็กคลินิก พิมพ์ชื่อวัคซีนหรือ 'เวลาทำการ' ได้เลยค่ะ",
+        text: fallback ?? (await buildSafetyNetMessage()),
       }];
     }
+  }
+  } catch (err) {
+    console.error(`buildReplyMessages("${text}", "${channel}") threw — falling back to safety-net message`, err);
+    return [{ type: "text", text: await buildSafetyNetMessage() }];
   }
 }

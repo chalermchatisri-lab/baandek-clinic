@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages, MEDICAL_QUESTION_ATTACHMENT_MESSAGE, type TextMessage } from "../services/reply";
+import { buildReplyMessages, buildMedicalQuestionAttachmentMessage, type TextMessage } from "../services/reply";
 
 export const messenger = new Hono();
 
@@ -32,6 +32,9 @@ function toMessengerQuickReplies(items?: QuickReplyItem[]) {
   }));
 }
 
+// *** แก้ 2026-08-30 ***: เดิมไม่เช็ค response.ok เลย — ถ้า Graph API ปฏิเสธ request
+// (page token หมดอายุ, ผู้ใช้ปิดกั้นบอท, เกิน 24h messaging window ฯลฯ) โค้ดจะไม่รู้เลย
+// และไม่มี log ใดๆ ทั้งสิ้น เพิ่ม log เพื่อให้ debug เคส "เงียบ" แบบนี้ย้อนหลังได้
 async function send(recipientId: string, msg: TextMessage) {
   const message: Record<string, unknown> = { text: msg.text };
   const quickReplies = toMessengerQuickReplies(
@@ -39,7 +42,7 @@ async function send(recipientId: string, msg: TextMessage) {
   );
   if (quickReplies) message.quick_replies = quickReplies;
 
-  await fetch(
+  const res = await fetch(
     `https://graph.facebook.com/v20.0/me/messages?access_token=${env.fbPageToken}`,
     {
       method: "POST",
@@ -51,6 +54,9 @@ async function send(recipientId: string, msg: TextMessage) {
       }),
     },
   );
+  if (!res.ok) {
+    console.error(`Messenger send API failed: HTTP ${res.status}`, await res.text().catch(() => ""));
+  }
 }
 
 messenger.post("/webhook/messenger", async (c) => {
@@ -62,20 +68,34 @@ messenger.post("/webhook/messenger", async (c) => {
     events
       .filter((m: any) => m.sender?.id && (m.message?.text || m.message?.attachments))
       .map(async (m: any) => {
-        // Attachments (image/sticker/video/etc., e.g. a parent sending a photo of
-        // their sick child) used to be silently dropped here — no reply at all.
-        if (!m.message?.text) {
-          return send(m.sender.id, { type: "text", text: MEDICAL_QUESTION_ATTACHMENT_MESSAGE });
+        try {
+          // Attachments (image/sticker/video/etc., e.g. a parent sending a photo of
+          // their sick child) used to be silently dropped here — no reply at all.
+          if (!m.message?.text) {
+            return await send(m.sender.id, { type: "text", text: await buildMedicalQuestionAttachmentMessage() });
+          }
+          // A quick-reply tap echoes back message.text = the button's *title* (the
+          // visible label, e.g. "6 เดือน") — Messenger's actual payload is a separate
+          // message.quick_reply.payload field the webhook has to read explicitly, unlike
+          // LINE where the message action's "text" IS what gets sent on tap. Every quick
+          // reply built in reply.ts sets title=label, payload=the real intended text
+          // (toMessengerQuickReplies in this file), so read payload first when present.
+          const inputText = m.message.quick_reply?.payload ?? m.message.text;
+          const msgs = await buildReplyMessages(String(inputText), "messenger");
+          for (const msg of msgs) await send(m.sender.id, msg);
+        } catch (err) {
+          // *** แก้ 2026-08-30 ***: ชั้นสุดท้ายจริงๆ — buildReplyMessages() มี try/catch
+          // ของตัวเองแล้ว (ไม่ควร throw มาถึงตรงนี้ได้) แต่ครอบอีกชั้นด้วยข้อความ hardcode
+          // ล้วนๆ (ไม่พึ่ง config()/Supabase เลยแม้แต่น้อย) — สาเหตุเดิมของเคส "ลูกไข้ 38
+          // องศาทำให้ดี" ที่เงียบสนิทบน Messenger คือ resolveVaccineGroup() ใน intent.ts
+          // ไม่มี try/catch ล้อม Supabase call มาก่อน (แก้แล้ว) แต่ชั้นนี้กันไว้เผื่อจุดอื่น
+          // ที่ยังไม่รู้ตัวในอนาคตด้วย ยืนยันว่า "ห้ามเงียบเด็ดขาด" เป็นจริงเสมอ
+          console.error("Messenger webhook: unexpected error building/sending reply", err);
+          await send(m.sender.id, {
+            type: "text",
+            text: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว กรุณาโทรติดต่อคลินิกโดยตรงค่ะ ☎️ 085-065-9715",
+          });
         }
-        // A quick-reply tap echoes back message.text = the button's *title* (the
-        // visible label, e.g. "6 เดือน") — Messenger's actual payload is a separate
-        // message.quick_reply.payload field the webhook has to read explicitly, unlike
-        // LINE where the message action's "text" IS what gets sent on tap. Every quick
-        // reply built in reply.ts sets title=label, payload=the real intended text
-        // (toMessengerQuickReplies in this file), so read payload first when present.
-        const inputText = m.message.quick_reply?.payload ?? m.message.text;
-        const msgs = await buildReplyMessages(String(inputText), "messenger");
-        for (const msg of msgs) await send(m.sender.id, msg);
       }),
   );
   return c.text("EVENT_RECEIVED");
