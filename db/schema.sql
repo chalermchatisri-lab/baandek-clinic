@@ -306,6 +306,37 @@ create table if not exists incident_log (
 create index if not exists idx_incident_ts on incident_log (ts desc);
 create index if not exists idx_incident_status on incident_log (status);
 
+-- ---------------------------------------------------------------------------
+-- 9b) STOCK — stock_items (medicine/formula/vaccine inventory) + staff_roles
+--   stock_items is synced daily from KallayaClinic.mdb (รายการยา) by
+--   sync_mdb_stock(), but name/category/unit/min_threshold become
+--   dashboard-owned once a row exists — sync only ever touches qty_on_hand
+--   and last_synced_at on conflict, never overwriting a staff edit.
+-- ---------------------------------------------------------------------------
+create table if not exists stock_items (
+  id              uuid primary key default gen_random_uuid(),
+  mdb_item_id     int unique,                        -- รหัสยา; null = dashboard-only item, never synced
+  name            text not null,
+  category        text not null,                     -- ยา | นม | วัคซีน ... free text, not an enum
+  unit            text,
+  qty_on_hand     int not null default 0,
+  min_threshold   int not null default 0,
+  active          boolean not null default true,
+  last_synced_at  timestamptz,
+  updated_at      timestamptz not null default now()
+);
+create index if not exists idx_stock_items_category on stock_items (category);
+create trigger trg_stock_items_updated before update on stock_items
+  for each row execute function set_updated_at();
+
+-- Minimal per-user role tag for restricting the dashboard UI (e.g. Kallaya's
+-- stock-only account). No row = full access (existing accounts unaffected).
+create table if not exists staff_roles (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  role       text not null,
+  created_at timestamptz not null default now()
+);
+
 -- ============================================================================
 -- 10) ROW LEVEL SECURITY
 --   Model: backend (Hono) uses service_role key -> bypasses RLS.
@@ -333,6 +364,8 @@ alter table services        enable row level security;
 alter table team            enable row level security;
 alter table reviews         enable row level security;
 alter table vaccine_news    enable row level security;
+alter table stock_items     enable row level security;
+alter table staff_roles     enable row level security;
 
 -- Authenticated (dashboard) = full CRUD on everything
 do $$
@@ -342,13 +375,18 @@ begin
     'patients','appointments','leads','incident_log','vaccines','vaccine_rules',
     'disease_groups','vaccine_aliases','age_guide','clinic_hours','closures',
     'clinic_config','articles','faq','promotions','packages','services','team',
-    'reviews','vaccine_news'
+    'reviews','vaccine_news','stock_items'
   ] loop
     execute format(
       'create policy %I on %I for all to authenticated using (true) with check (true);',
       t||'_auth_all', t);
   end loop;
 end $$;
+
+-- staff_roles: a user may read only their own role tag (not everyone's) —
+-- deliberately not part of the generic full-CRUD loop above.
+create policy staff_roles_self_read on staff_roles
+  for select to authenticated using (auth.uid() = user_id);
 
 -- Anonymous (landing page) = read-only, published/active content ONLY.
 create policy vaccines_anon_read     on vaccines      for select to anon using (status = 'ACTIVE');

@@ -1,12 +1,14 @@
 import { useState } from "react";
-import { TABLES, GROUP_ORDER, type TableConfig } from "../lib/tables";
+import { TABLES, GROUP_ORDER } from "../lib/tables";
 import { supabase } from "../lib/supabase";
+import type { View } from "../App";
 
 const VACCINE_ADVISOR_CACHE_CLEAR_URL =
   "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor/api/cache-clear";
 
-export function Layout({ active, onSelect, email, children }:
-  { active: TableConfig; onSelect: (t: TableConfig) => void; email: string; children: React.ReactNode }) {
+export function Layout({ active, onSelect, email, restrictToStock, children }: {
+  active: View; onSelect: (v: View) => void; email: string; restrictToStock?: boolean; children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [cacheState, setCacheState] = useState<"idle" | "loading" | "ok" | "error">("idle");
 
@@ -30,25 +32,48 @@ export function Layout({ active, onSelect, email, children }:
     }
   }
 
+  const stockButton = (
+    <button onClick={() => { onSelect({ kind: "stock" }); setOpen(false); }}
+      className={`rounded-lg px-3 py-2 text-left text-sm transition ${
+        active.kind === "stock"
+          ? "bg-clinic-primary050 font-medium text-clinic-primary"
+          : "text-clinic-ink hover:bg-clinic-bg"
+      }`}>
+      สต็อกสินค้า
+    </button>
+  );
+
   const nav = (
     <nav className="flex flex-col gap-6 p-4">
-      {GROUP_ORDER.map((g) => (
-        <div key={g}>
-          <div className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-clinic-muted">{g}</div>
-          <div className="flex flex-col gap-0.5">
-            {TABLES.filter((t) => t.group === g).map((t) => (
-              <button key={t.name} onClick={() => { onSelect(t); setOpen(false); }}
-                className={`rounded-lg px-3 py-2 text-left text-sm transition ${
-                  active.name === t.name
-                    ? "bg-clinic-primary050 font-medium text-clinic-primary"
-                    : "text-clinic-ink hover:bg-clinic-bg"
-                }`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
+      {restrictToStock ? (
+        <div>
+          <div className="flex flex-col gap-0.5">{stockButton}</div>
         </div>
-      ))}
+      ) : (
+        <>
+          <div>
+            <div className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-clinic-muted">สต็อก</div>
+            <div className="flex flex-col gap-0.5">{stockButton}</div>
+          </div>
+          {GROUP_ORDER.map((g) => (
+            <div key={g}>
+              <div className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-clinic-muted">{g}</div>
+              <div className="flex flex-col gap-0.5">
+                {TABLES.filter((t) => t.group === g).map((t) => (
+                  <button key={t.name} onClick={() => { onSelect({ kind: "table", cfg: t }); setOpen(false); }}
+                    className={`rounded-lg px-3 py-2 text-left text-sm transition ${
+                      active.kind === "table" && active.cfg.name === t.name
+                        ? "bg-clinic-primary050 font-medium text-clinic-primary"
+                        : "text-clinic-ink hover:bg-clinic-bg"
+                    }`}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </nav>
   );
 

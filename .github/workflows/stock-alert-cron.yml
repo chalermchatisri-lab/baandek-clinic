@@ -1,0 +1,28 @@
+name: Stock alert push
+
+# Fires once daily at 20:10 Bangkok (13:10 UTC) — 10 minutes after the
+# clinic-side .mdb sync (BaandekStockSync scheduled task) is expected to
+# finish — and asks the Render backend to push a LINE alert if any stock
+# item is yellow/red. Runs from GitHub's infra rather than the clinic PC's
+# sync script so it still fires even if that PC/sync had a bad day; the
+# endpoint itself decides whether there's anything worth sending.
+
+on:
+  schedule:
+    - cron: "10 13 * * *"
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/stock-alert-run
+        run: |
+          STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            -H "x-internal-token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            https://baandek-clinic.onrender.com/internal/stock-alert-run)
+          echo "HTTP $STATUS"
+          cat response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::warning::stock-alert-run did not return 200 (got $STATUS)"
+          fi

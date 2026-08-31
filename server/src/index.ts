@@ -4,6 +4,7 @@ import { line } from "./routes/line";
 import { messenger } from "./routes/messenger";
 import { booking } from "./routes/booking";
 import { publicApi } from "./routes/public";
+import { internalApi } from "./routes/internal";
 import { env } from "./lib/env";
 
 const app = new Hono();
@@ -12,6 +13,7 @@ app.route("/", line);
 app.route("/", messenger);
 app.route("/", booking);
 app.route("/", publicApi);
+app.route("/", internalApi);
 app.get("/", (c) => c.text("BAANDEK bot API"));
 
 export default { port: env.port, fetch: app.fetch };

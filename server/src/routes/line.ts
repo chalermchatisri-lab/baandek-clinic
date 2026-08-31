@@ -34,6 +34,24 @@ async function reply(replyToken: string, messages: unknown[]) {
   }
 }
 
+// Push-to-userId (as opposed to reply(), which only works within a webhook's
+// reply-token window) — used by the stock alert job to message a specific
+// staff LINE userId outside any incoming webhook event.
+export async function pushMessage(userId: string, messages: unknown[]): Promise<boolean> {
+  const res = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${env.lineToken}`,
+    },
+    body: JSON.stringify({ to: userId, messages: messages.slice(0, 5) }),
+  });
+  if (!res.ok) {
+    console.error(`LINE push API failed: HTTP ${res.status}`, await res.text().catch(() => ""));
+  }
+  return res.ok;
+}
+
 line.post("/webhook/line", async (c) => {
   const raw = await c.req.text();
   if (!(await verify(raw, c.req.header("x-line-signature")))) {

@@ -13,5 +13,6 @@ export const env = {
   fbVerifyToken: process.env.FB_VERIFY_TOKEN ?? "",
   geminiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
+  internalCronSecret: process.env.INTERNAL_CRON_SECRET ?? "",
   port: Number(process.env.PORT ?? 8080),
 };
