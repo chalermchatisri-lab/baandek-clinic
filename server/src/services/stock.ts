@@ -67,3 +67,101 @@ export function buildStockAlertMessage(items: StockItem[]): string | null {
   sections.push("ดูรายละเอียด/แก้ไขได้ที่ Dashboard: https://vaccine-cbc-web.vercel.app");
   return sections.join("\n\n");
 }
+
+// ============================================================================
+// Customer-facing PRODUCT_STOCK_INQUIRY matching (chunk 2)
+// ============================================================================
+// Priority order per spec: milk first (asked most often), then these 7 named
+// vaccines (asked most often via FB Messenger). "hints" are plain search terms
+// against the REAL product names already in stock_items (checked against live
+// data 2026-08-31 — see e.g. "INFLUENZA VACCINE  -Vaccine", "Qdenga",
+// "Clesrovimab (Enflonsia)", "speeda -Vaccine") — not a new taxonomy, just
+// substrings to find the right real rows. Every group is handled by the exact
+// same lookup+format code below; no group gets special-cased.
+const PRIORITY_VACCINE_GROUPS: { label: string; hints: string[] }[] = [
+  { label: "ไข้หวัดใหญ่", hints: ["influenza", "flu", "flumist", "ไข้หวัดใหญ่"] },
+  { label: "ไอพีดี (ปอดบวม)", hints: ["pcv", "prevnar", "synflorix", "weuphoria", "ไอพีดี", "ปอดบวม"] },
+  { label: "RSV", hints: ["rsv", "enflonsia", "nirsevimab", "clesrovimab", "beyfortus"] },
+  { label: "พิษสุนัขบ้า", hints: ["speeda", "rabies", "verorab", "พิษสุนัขบ้า"] },
+  { label: "EV71 (มือเท้าปาก)", hints: ["entrovac", "ev71", "มือเท้าปาก"] },
+  { label: "HPV", hints: ["gardasil", "hpv"] },
+  { label: "ไข้เลือดออก", hints: ["qdenga", "dengue", "ไข้เลือดออก"] },
+];
+
+function cleanName(name: string): string {
+  return name.toLowerCase().replace(/\s*-\s*vaccine\s*$/i, "").trim();
+}
+
+/** A customer naming a specific product ("มีนม Enfalac ไหม") — matched against
+ *  real stock_items names (data-driven, not a hardcoded product list): either
+ *  the item's cleaned name appears in the message, or the item's first
+ *  word/brand token (≥4 chars, to avoid noisy short-word false positives) does. */
+export async function findSpecificStockMatches(text: string): Promise<StockItem[]> {
+  const t = text.toLowerCase();
+  const items = await getActiveStockItems();
+  return items
+    .filter((i) => {
+      const key = cleanName(i.name);
+      if (!key) return false;
+      if (t.includes(key)) return true;
+      const firstWord = key.split(/\s+/)[0] ?? "";
+      return firstWord.length >= 4 && t.includes(firstWord);
+    })
+    .slice(0, 5);
+}
+
+export interface StockSection { label: string; items: StockItem[] }
+
+/** No specific product named — the generic "มีนมไหม"/"มียาไหม" phrasing that
+ *  KW.productStock actually catches. Milk first, then the 7 priority vaccine
+ *  groups above (only sections that have at least one matching row are kept). */
+export async function getPriorityStockOverview(): Promise<StockSection[]> {
+  const items = await getActiveStockItems();
+  const sections: StockSection[] = [{ label: "นม", items: items.filter((i) => i.category === "นม") }];
+  for (const group of PRIORITY_VACCINE_GROUPS) {
+    const matched = items.filter(
+      (i) => i.category === "วัคซีน" && group.hints.some((h) => cleanName(i.name).includes(h)),
+    );
+    if (matched.length) sections.push({ label: group.label, items: matched });
+  }
+  return sections.filter((s) => s.items.length > 0);
+}
+
+// Customer-facing status wording deliberately omits raw quantities (an
+// internal restocking detail, not something to tell a parent) — unlike
+// buildStockAlertMessage() above, which is for Kallaya/admin use only.
+const CUSTOMER_STATUS: Record<AlertLevel, string> = {
+  green: "🟢 มีพร้อมให้บริการค่ะ",
+  yellow: "🟡 เหลือจำนวนจำกัด แนะนำติดต่อล่วงหน้าค่ะ",
+  red: "🔴 หมดชั่วคราวค่ะ ขออภัยนะคะ",
+};
+
+function customerLine(item: StockItem): string {
+  return `• ${item.name}: ${CUSTOMER_STATUS[item.level]}`;
+}
+
+const MAX_ITEMS_PER_SECTION = 8;
+
+function formatCustomerSection(section: StockSection): string {
+  const shown = section.items.slice(0, MAX_ITEMS_PER_SECTION).map(customerLine);
+  const extra = section.items.length - shown.length;
+  if (extra > 0) shown.push(`… และอีก ${extra} รายการ`);
+  return `${section.label}\n${shown.join("\n")}`;
+}
+
+/** Specific product(s) named and matched. */
+export function buildSpecificStockReply(matches: StockItem[]): string {
+  const lines = matches.map(customerLine).join("\n");
+  return `สอบถามเรื่องสต็อกสินค้านะคะ 🙏\n\n${lines}`;
+}
+
+/** No specific product matched — the priority overview (milk, then the 7
+ *  named vaccines). Never empty in practice (stock_items always has milk/
+ *  vaccine rows), but guards the edge case anyway. */
+export function buildOverviewStockReply(sections: StockSection[]): string {
+  if (sections.length === 0) {
+    return "ขอบคุณที่สอบถามนะคะ 🙏 ตอนนี้ยังไม่มีข้อมูลสต็อกในระบบค่ะ กรุณาสอบถามเจ้าหน้าที่โดยตรงนะคะ";
+  }
+  const body = sections.map(formatCustomerSection).join("\n\n");
+  return `สอบถามเรื่องสต็อกสินค้า (นม/วัคซีน) ที่ลูกค้าถามบ่อยค่ะ 🙏\n\n${body}`;
+}

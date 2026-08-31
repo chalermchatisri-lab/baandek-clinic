@@ -4,6 +4,7 @@ import { detectIntent } from "./intent";
 import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeCardByMonths, buildAgeGroupVaccineList } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone } from "./appointmentCheck";
+import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockReply, buildOverviewStockReply } from "./stock";
 
 export type TextMessage = { type: "text"; text: string; quickReply?: unknown };
 
@@ -90,12 +91,27 @@ async function buildMedicalQuestionTextMessage(): Promise<string> {
   );
 }
 
-async function buildProductStockMessage(): Promise<string> {
-  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
-  return (
-    "ขอบคุณที่สอบถามนะคะ 🙏 เรื่องสต็อกสินค้า (นม/ยา/เวชภัณฑ์) ขณะนี้ระบบยังไม่สามารถเช็คสต็อกแบบเรียลไทม์ได้ค่ะ " +
-    `กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงเพื่อความชัดเจนก่อนเดินทางมานะคะ ☎️ ${phone} (ในเวลาทำการ)`
-  );
+// *** เพิ่ม 2026-08-31 ***: เดิมเป็น stub ข้อความ static บอกให้โทรถามเอง ไม่เคยเช็คสต็อกจริง
+// เลย ตอนนี้ผูกกับ stock_items จริง (sync จาก KallayaClinic.mdb ทุกวัน 20:00) — ถ้าลูกค้า
+// เอ่ยชื่อสินค้าเจาะจง (เช่น "มีนม Enfalac ไหม") ตอบเฉพาะรายการนั้น ถ้าถามกว้างๆ (เช่น
+// "มีนมไหม", "มียาไหม" — คำที่ KW.productStock จับอยู่แล้ว) ตอบสรุปตามลำดับความสำคัญ:
+// นมก่อน ตามด้วยวัคซีน 7 รายการที่ถามบ่อย (ดู services/stock.ts) จำนวนที่โชว์ลูกค้าเป็น
+// สถานะ (มี/ใกล้หมด/หมด) ไม่ใช่ตัวเลขจริง — ตัวเลขจริงมีแค่ใน Dashboard/แจ้งเตือน LINE ฝั่ง
+// admin เท่านั้น
+async function buildProductStockMessage(text: string): Promise<string> {
+  try {
+    const specific = await findSpecificStockMatches(text);
+    if (specific.length > 0) return buildSpecificStockReply(specific);
+    const overview = await getPriorityStockOverview();
+    return buildOverviewStockReply(overview);
+  } catch (err) {
+    console.error("buildProductStockMessage: stock lookup failed, falling back to phone referral", err);
+    const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+    return (
+      "ขอบคุณที่สอบถามนะคะ 🙏 ขณะนี้ระบบเช็คสต็อกขัดข้องชั่วคราวค่ะ " +
+      `กรุณาโทรสอบถามเจ้าหน้าที่โดยตรงนะคะ ☎️ ${phone} (ในเวลาทำการ)`
+    );
+  }
 }
 
 // Age-picker quick-reply — the entry point when someone asks about vaccines
@@ -298,7 +314,7 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
     case "MEDICAL_QUESTION":
       return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
     case "PRODUCT_STOCK_INQUIRY":
-      return [{ type: "text", text: await buildProductStockMessage() }];
+      return [{ type: "text", text: await buildProductStockMessage(r.text) }];
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
       const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
