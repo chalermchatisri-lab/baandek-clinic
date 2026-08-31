@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import type { TableConfig, Column } from "../lib/tables";
 import { Field } from "./Field";
+import { PasswordPrompt } from "./PasswordPrompt";
 
 type Row = Record<string, unknown>;
 
@@ -101,6 +102,7 @@ function EditModal({ cfg, row, isNew, onClose, onSaved }:
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
+  const [pwPromptFor, setPwPromptFor] = useState<"save" | "delete" | null>(null);
 
   // On edit, the PK is fixed; on create with a user-entered PK it's editable.
   const pkLocked = !isNew || cfg.pkGenerated === true;
@@ -122,8 +124,20 @@ function EditModal({ cfg, row, isNew, onClose, onSaved }:
     return Object.keys(e).length === 0;
   }
 
-  async function save() {
+  // Password confirmation gates the actual write — validate/confirm happen
+  // first, the Supabase insert/update/delete only fires after the admin
+  // password is verified server-side (doSave/doRemove below).
+  function handleSaveClick() {
     if (!validate()) return;
+    setPwPromptFor("save");
+  }
+
+  function handleDeleteClick() {
+    if (!confirm("ลบรายการนี้? การลบไม่สามารถย้อนกลับได้")) return;
+    setPwPromptFor("delete");
+  }
+
+  async function doSave() {
     setSaving(true); setSaveErr(null);
     const payload: Row = {};
     cfg.columns.forEach((c) => {
@@ -138,8 +152,7 @@ function EditModal({ cfg, row, isNew, onClose, onSaved }:
     else onSaved();
   }
 
-  async function remove() {
-    if (!confirm("ลบรายการนี้? การลบไม่สามารถย้อนกลับได้")) return;
+  async function doRemove() {
     setSaving(true);
     const { error } = await supabase.from(cfg.name).delete().eq(cfg.pk, row[cfg.pk]);
     setSaving(false);
@@ -175,18 +188,31 @@ function EditModal({ cfg, row, isNew, onClose, onSaved }:
 
         <div className="mt-6 flex items-center justify-between">
           {!isNew ? (
-            <button onClick={remove} disabled={saving}
+            <button onClick={handleDeleteClick} disabled={saving}
               className="rounded-lg px-3 py-2 text-sm font-medium text-clinic-danger hover:bg-red-50">ลบ</button>
           ) : <span />}
           <div className="flex gap-2">
             <button onClick={onClose} className="rounded-lg border border-clinic-border px-4 py-2 text-sm">ยกเลิก</button>
-            <button onClick={save} disabled={saving}
+            <button onClick={handleSaveClick} disabled={saving}
               className="rounded-lg bg-clinic-primary px-5 py-2 text-sm font-medium text-white hover:bg-clinic-primary600 disabled:opacity-60">
               {saving ? "กำลังบันทึก…" : "บันทึก"}
             </button>
           </div>
         </div>
       </div>
+
+      {pwPromptFor && (
+        <PasswordPrompt
+          actionLabel={pwPromptFor === "delete" ? "ลบข้อมูล" : "บันทึกข้อมูล"}
+          onCancel={() => setPwPromptFor(null)}
+          onConfirm={() => {
+            const action = pwPromptFor;
+            setPwPromptFor(null);
+            if (action === "save") void doSave();
+            else void doRemove();
+          }}
+        />
+      )}
     </div>
   );
 }

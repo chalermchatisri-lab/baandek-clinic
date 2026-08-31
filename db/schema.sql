@@ -358,7 +358,10 @@ create policy alias_anon_read        on vaccine_aliases for select to anon using
 create policy age_anon_read          on age_guide     for select to anon using (true);
 create policy hours_anon_read        on clinic_hours  for select to anon using (true);
 create policy closures_anon_read     on closures      for select to anon using (active = true);
-create policy config_anon_read       on clinic_config for select to anon using (true);
+-- CRUD_ADMIN_PASSWORD is excluded so the anon key (embedded in the dashboard
+-- frontend) can never read it directly via PostgREST — only the
+-- verify-admin-password Edge Function (service role) can see it.
+create policy config_anon_read       on clinic_config for select to anon using (key <> 'CRUD_ADMIN_PASSWORD');
 create policy articles_anon_read     on articles      for select to anon using (published = true);
 create policy faq_anon_read          on faq           for select to anon using (true);
 create policy promo_anon_read        on promotions    for select to anon using (active = true);

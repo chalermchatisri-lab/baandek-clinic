@@ -30,6 +30,9 @@
 - [ ] CRUD: vaccines, vaccine_rules, promotions, clinic_hours, closures
 - [ ] Appointments view (read + status update)
 - [ ] Config editor (clinic_config)
+- [x] Confirm-password gate before save/update/delete on every CRUD page
+      (`verify-admin-password` Edge Function checks `clinic_config.CRUD_ADMIN_PASSWORD`
+      server-side; anon RLS on `clinic_config` now excludes that key)
 
 ## 🚧 Phase 4 — Cutover
 - [ ] Point LINE/Messenger webhooks to Render
