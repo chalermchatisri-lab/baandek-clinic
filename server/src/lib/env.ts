@@ -14,6 +14,5 @@ export const env = {
   geminiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",
   internalCronSecret: process.env.INTERNAL_CRON_SECRET ?? "",
-  debugToken: process.env.DEBUG_TOKEN ?? "",
   port: Number(process.env.PORT ?? 8080),
 };
