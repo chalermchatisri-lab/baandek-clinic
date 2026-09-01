@@ -63,9 +63,16 @@ line.post("/webhook/line", async (c) => {
       .filter((e) => e.type === "message" && e.replyToken)
       .map(async (e) => {
         try {
-          // Non-text message events (image/sticker/video/audio/file/location) used
-          // to be filtered out above and get zero reply — worst case: a parent
-          // sends a photo of their sick child and hears nothing back at all.
+          // *** เพิ่ม 2026-09-01 (bug 4, ยืนยันแล้ว 1 ก.ย.) ***: sticker เป็นคนละ message
+          // type จาก image/video/ฯลฯ ใน LINE โดยตรง (e.message.type === "sticker") — มัก
+          // ใช้ปิดท้ายสนทนา ("ขอบคุณ"/OK) ไม่ใช่ถามเรื่องสินค้า/อาการเหมือนรูปจริง จึงตอบ
+          // emoji สั้นแทน (เหมือน END_CONVERSATION ใน reply.ts) ไม่ใช่ attachment message เต็ม
+          if (e.message?.type === "sticker") {
+            return await reply(e.replyToken, [{ type: "text", text: "🙏" }]);
+          }
+          // Non-text message events (image/video/audio/file/location) used to be
+          // filtered out above and get zero reply — worst case: a parent sends a
+          // photo of their sick child and hears nothing back at all.
           if (e.message?.type !== "text") {
             return await reply(e.replyToken, [{ type: "text", text: await buildMedicalQuestionAttachmentMessage() }]);
           }

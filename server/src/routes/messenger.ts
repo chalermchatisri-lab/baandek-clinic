@@ -69,8 +69,16 @@ messenger.post("/webhook/messenger", async (c) => {
       .filter((m: any) => m.sender?.id && (m.message?.text || m.message?.attachments))
       .map(async (m: any) => {
         try {
-          // Attachments (image/sticker/video/etc., e.g. a parent sending a photo of
-          // their sick child) used to be silently dropped here — no reply at all.
+          // *** เพิ่ม 2026-09-01 (bug 4, ยืนยันแล้ว 1 ก.ย.) ***: Messenger ไม่มี attachment
+          // type "sticker" แยกจริงๆ เหมือน LINE — sticker (รวมปุ่ม thumbs-up มาตรฐาน) ส่งมา
+          // เป็น type "image" ที่มี payload.sticker_id แนบมาด้วยเสมอ ต่างจากรูปถ่ายจริงที่ไม่มี
+          // ฟิลด์นี้ — เช็คก่อนเพื่อตอบ emoji สั้นแทน attachment message เต็ม (เหมือนฝั่ง LINE)
+          const isSticker = (m.message?.attachments ?? []).some((a: any) => a?.payload?.sticker_id);
+          if (isSticker) {
+            return await send(m.sender.id, { type: "text", text: "🙏" });
+          }
+          // Attachments (image/video/etc., e.g. a parent sending a photo of their
+          // sick child) used to be silently dropped here — no reply at all.
           if (!m.message?.text) {
             return await send(m.sender.id, { type: "text", text: await buildMedicalQuestionAttachmentMessage() });
           }

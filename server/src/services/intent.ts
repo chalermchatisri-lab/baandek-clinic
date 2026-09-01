@@ -4,6 +4,8 @@ import { env } from "../lib/env";
 export type Intent =
   | "APPOINTMENT_CHANGE"
   | "APPOINTMENT_CHECK"
+  | "APPOINTMENT_CONFIRM"
+  | "END_CONVERSATION"
   | "CLINIC_STATUS"
   | "CLINIC_STATUS_SPECIFIC_DATE"
   | "CLINIC_DATE_UNCLEAR"
@@ -40,6 +42,9 @@ const KW = {
   price: ["ราคา", "เท่าไร", "เท่าไหร่", "กี่บาท", "ค่าฉีด", "ค่าใช้จ่าย"],
   avail: ["มีไหม", "มีมั้ย", "มีรึเปล่า", "มีหรือเปล่า", "มีวัคซีน", "มีสต็อก"],
   status: ["เปิดไหม", "ปิดไหม", "หยุดไหม", "วันนี้เปิด", "ยังเปิด", "ไปทัน", "เปิด-ปิดวันนี้", "เปิดปิด", "เช็ควันทำการ"],
+  // *** เพิ่ม 2026-09-01 (bug 3) ***: bare "เปิดไหม" ด้านบนพลาดคำถามจริงที่มีคำแทรกระหว่าง
+  // เปิด/ปิด/หยุด กับ ไหม เช่น "เปิดปกติใช่ไหมคะ" (เจอจริง — ตกไป FALLBACK ทั้งที่ตอบได้)
+  // ดู STATUS_QUESTION_PATTERN ด้านล่างไฟล์ — เป็น regex เสริม ไม่ได้แทนที่ literal list นี้
   time: ["เวลาทำการ", "เวลาเปิด", "กี่โมง", "ตารางเวลา"],
   location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
   // "Check my appointment" — MUST be tested before apptChange (see detectIntent).
@@ -53,6 +58,15 @@ const KW = {
   // Without it, these fall through to the generic "วัคซีน" bucket below and get
   // misanswered as a price/info question instead of routed to appointment flow.
   apptChange: ["เลื่อนนัด", "เปลี่ยนนัด", "ขอเลื่อน", "มาไม่ได้", "ไปไม่ได้", "ไม่สะดวก", "พลาดนัด", "นัด"],
+  // *** เพิ่ม 2026-09-01 (บั๊ก) ***: ต้องเช็คก่อน apptChange เสมอ เหตุผลเดียวกับ apptCheck
+  // ด้านบน — ข้อความถาม "ยืนยันมาตามนัดเดิม" (ไม่ได้ขอเลื่อน) มักมีคำว่า "นัด" อยู่ด้วย เช่น
+  // "ทางรพ.นัดฉีด 15 ก.ย เราต้องไปฉีด 15 ก.ย หรือไปก่อนคะ" ซึ่งชนกับ apptChange's bare "นัด"
+  // ทำให้บอทตอบเนื้อหาเลื่อนนัดทั้งที่ลูกค้าไม่ได้ขอเลื่อนเลย
+  apptConfirm: [
+    "มาตามนัดเดิม", "ไปตามนัดเดิม", "มาวันนัดเดิม", "ไปวันนัดเดิม", "ตามนัดเดิม",
+    "หรือไปก่อน", "หรือมาก่อน", "ไปก่อนได้ไหม", "มาก่อนได้ไหม",
+    "ต้องไปตามนัด", "ต้องมาตามนัด",
+  ],
   services: ["บริการ"],
   holidays: ["วันหยุด", "ปิดยาว", "หยุดยาว", "หยุดคลินิก"],
   news: ["ข่าวสาร", "ข่าว"],
@@ -79,8 +93,13 @@ const KW = {
   // เพราะ priority ในการ route (บริการ/นัด/ราคา/ฯลฯ) เช็คก่อนหน้าอยู่แล้ว และตอนนี้ทุก
   // ข้อความมี safety-net fallback รองรับเสมอ (ดู reply.ts) พลาดเป็น MEDICAL_QUESTION ยังดี
   // กว่าพลาดเป็นความเงียบเหมือนเคส 2026-08-30
+  // *** แก้ 2026-09-01 (บั๊ก) ***: bare "ไข้" ย้ายออกจาก list นี้ไปเป็น hasBareFeverWord()
+  // แทน (เช็คท้ายไฟล์) เพราะเดิมไปแมตช์เป็น substring ในชื่อวัคซีน/โรคที่ขึ้นต้นด้วย "ไข้"
+  // (ไข้หวัดใหญ่/ไข้เลือดออก/ไข้สมองอักเสบเจอี/ไข้กาฬหลังแอ่น) ทำให้ "มีวัคซีนไข้หวัดใหญ่ไหม"
+  // ตอบ MEDICAL_QUESTION แทนที่จะตอบเรื่องวัคซีน — "มีไข้"/"ไข้สูง"/"ไข้ขึ้น" ด้านล่างไม่ชน
+  // ปัญหานี้ (ไม่ปรากฏเป็น substring ในชื่อวัคซีนกลุ่มนี้) จึงคงไว้เหมือนเดิมได้
   symptom: [
-    "ไม่สบาย", "ป่วย", "ไข้", "มีไข้", "ตัวร้อน", "ไข้สูง", "ไข้ขึ้น",
+    "ไม่สบาย", "ป่วย", "มีไข้", "ตัวร้อน", "ไข้สูง", "ไข้ขึ้น",
     "ท้องเสีย", "ถ่ายเหลว", "อาเจียนบ่อย", "อาเจียน",
     "ผื่น", "ผื่นขึ้น", "มีผื่น", "ผื่นแดง",
     "แพ้", "จาม",
@@ -107,7 +126,37 @@ const KW = {
     "ผ้าอ้อมมีไหม", "มีผ้าอ้อมไหม",
     "ของใช้เด็กมีไหม", "มีของใช้เด็กไหม",
   ],
+  // *** เพิ่ม 2026-09-01 (บั๊ก 4, ยืนยันแล้ว) ***: เช็คเป็นตัวสุดท้ายก่อนตกไป Gemini/UNKNOWN
+  // (ดู detectIntent) เพื่อให้คำถามจริงที่มี "ขอบคุณ" นำหน้าแต่ตามด้วยคำถามจริงๆ (เช่น
+  // "ขอบคุณค่ะ แล้วขอถามราคาวัคซีนหน่อยค่ะ") ยังโดน KW.price ดักตอบก่อนอยู่ดี ไม่ใช่ END_CONVERSATION
+  thanks: ["ขอบคุณ", "ขอบใจ", "thank you", "thanks"],
 };
+
+// "ค่ะ"/"ครับ"/"คะ" เดี่ยวๆ (ทั้งข้อความมีแค่นี้) — ต้อง exact match เท่านั้น ห้าม substring
+// เด็ดขาด เพราะเป็นคำลงท้ายประโยคที่พบในเกือบทุกข้อความภาษาไทย ถ้าเช็คแบบ includes() จะจับ
+// ผิดมหาศาล (เช่น "ราคาเท่าไหร่ค่ะ" ก็มี "ค่ะ" อยู่ในนั้นด้วย) รวม "คะ" เข้ามาด้วยแม้ทาง
+// ไวยากรณ์เป็นคำถาม เพราะในทางปฏิบัติผู้ปกครองมักพิมพ์รับทราบสั้นๆ ด้วยคำนี้เหมือนกัน
+const BARE_ACKNOWLEDGEMENT = new Set(["ค่ะ", "ครับ", "คะ"]);
+
+// ชื่อวัคซีน/โรคที่ขึ้นต้นด้วย "ไข้" แต่ไม่ใช่การรายงานอาการป่วย — ตัดออกจากข้อความก่อนเช็ค
+// ว่ามี "ไข้" เหลืออยู่แบบ bare หรือไม่ (ดูคอมเมนต์ที่ KW.symptom ด้านบนสำหรับบั๊กเต็ม)
+// ตรวจสอบกับ vaccine_aliases จริงแล้ว 2026-09-01: ครอบคลุมทั้ง "ไข้สมองอักเสบเจอี" (คำเดียว
+// พอเพราะ "เจอี" ไม่มี "ไข้" อยู่แล้ว) และ 3 alias ของ "ไข้กาฬหลังแอ่น" (acwy/ชนิดบี/บี)
+const FEVER_VACCINE_NAMES = ["ไข้หวัดใหญ่", "ไข้เลือดออก", "ไข้สมองอักเสบ", "ไข้กาฬหลังแอ่น"];
+
+function hasBareFeverWord(text: string): boolean {
+  let stripped = text;
+  for (const name of FEVER_VACCINE_NAMES) stripped = stripped.split(name).join("");
+  return stripped.includes("ไข้");
+}
+
+// เสริม KW.status (literal list) ด้วย pattern ที่ยอมให้มีคำแทรกสั้นๆ ระหว่าง เปิด/ปิด/หยุด
+// กับคำถามท้ายประโยค — ตั้งใจใช้ "คำเติมที่รู้จักแล้วเท่านั้น" (ไม่ใช่ .{0,N} กว้างๆ) เพื่อกัน
+// การจับผิดกับคำถามคนละบริบทที่บังเอิญมี "หยุด"/"ปิด" อยู่ด้วย เช่น "หยุดกินยาได้ไหม" (ถาม
+// เรื่องยา ไม่ใช่เรื่องวันเปิด-ปิดคลินิก) — ทดสอบแล้วว่า pattern นี้ไม่แมตช์ประโยคแบบนั้น
+// เพราะ "กินยาได้" ไม่ตรงกับคำเติมกลุ่มไหนเลย
+const STATUS_QUESTION_PATTERN =
+  /(เปิด|ปิด|หยุด)\s*(ตามปกติ|ปกติ)?\s*(อยู่)?\s*(ใช่)?\s*(ไหม|มั้ย|รึเปล่า|หรือเปล่า|หรือไม่)/;
 
 // จับ "ตัวเลข + องศา" (เช่น "38 องศา", "38.5°") แยกจาก KW.symptom เพราะผู้ปกครองมักบอก
 // อุณหภูมิลอยๆ โดยไม่มีคำอื่นที่ list ด้านบนจับได้เลย (เช่น "ลูกไข้ 38 องศาทำให้ดี" —
@@ -190,10 +239,16 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   const text = norm(message);
   if (!text) return { intent: "UNKNOWN", text };
 
+  // เช็คก่อนสุด — exact match ล้วน ไม่มีความเสี่ยงชนกับ intent อื่นเลย (ดูคอมเมนต์ที่
+  // BARE_ACKNOWLEDGEMENT ด้านบนสำหรับเหตุผลที่ต้อง exact match ไม่ใช่ substring)
+  if (BARE_ACKNOWLEDGEMENT.has(text)) return { intent: "END_CONVERSATION", text };
+
   if (has(text, KW.booking))    return { intent: "BOOKING_MENU", text };
   // apptCheck before apptChange: "เช็คนัดหมาย" (the booking-menu button payload)
   // contains "นัด", which apptChange also matches — order decides the winner.
   if (has(text, KW.apptCheck))  return { intent: "APPOINTMENT_CHECK", text };
+  // apptConfirm before apptChange too — same reasoning (ดูคอมเมนต์ที่ KW.apptConfirm ด้านบน)
+  if (has(text, KW.apptConfirm)) return { intent: "APPOINTMENT_CONFIRM", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
 
   // Checked before the generic KW.status match below, which would otherwise catch
@@ -210,7 +265,8 @@ export async function detectIntent(message: string): Promise<IntentResult> {
     return { intent: "CLINIC_DATE_UNCLEAR", text };
   }
 
-  if (has(text, KW.status))     return { intent: "CLINIC_STATUS", text };
+  if (has(text, KW.status) || STATUS_QUESTION_PATTERN.test(text))
+    return { intent: "CLINIC_STATUS", text };
   if (has(text, KW.time))       return { intent: "CLINIC_TIME", text };
   if (has(text, KW.location))   return { intent: "LOCATION", text };
   if (has(text, KW.services))   return { intent: "SERVICES", text };
@@ -226,7 +282,7 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   // must not be swallowed by the vaccine-question path below. TEMPERATURE_READING
   // checked in the same slot — a bare "38 องศา" is medical context on its own even
   // with zero KW.symptom words nearby (see TEMPERATURE_READING comment above).
-  if (has(text, KW.symptom) || TEMPERATURE_READING.test(text))
+  if (has(text, KW.symptom) || hasBareFeverWord(text) || TEMPERATURE_READING.test(text))
     return { intent: "MEDICAL_QUESTION", text };
   if (has(text, KW.productStock)) return { intent: "PRODUCT_STOCK_INQUIRY", text };
 
@@ -242,6 +298,12 @@ export async function detectIntent(message: string): Promise<IntentResult> {
     // VACCINE_INFO's own no-group handling in reply.ts.
     return { intent: "VACCINE_INFO", text, vaccineGroup: group, ageMonths };
   }
+
+  // *** แก้ 2026-09-01 (บั๊ก 4) ***: ต้องเช็คหลังสุด — หลังลองทุก intent ที่เจาะจงกว่าแล้ว
+  // จริงๆ (รวม vaccine-group resolution ด้านบน) ไม่ใช่ก่อนหน้านั้น เดิมวางไว้ก่อน
+  // resolveVaccineGroup() ทำให้ "ขอบคุณค่ะ แล้วขอถามราคาวัคซีนหน่อยค่ะ" (มีคำถามจริงต่อท้าย
+  // คำขอบคุณ) โดน END_CONVERSATION ดักไปก่อนที่จะถึงคิวถามราคา (เจอจาก regression test เอง)
+  if (has(text, KW.thanks)) return { intent: "END_CONVERSATION", text };
 
   // Only reach the AI when cheap paths miss — keeps latency + cost low.
   return env.geminiKey ? await geminiFallback(text) : { intent: "UNKNOWN", text };

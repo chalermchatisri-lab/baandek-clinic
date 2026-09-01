@@ -50,8 +50,12 @@ async function buildSafetyNetMessage(): Promise<string> {
     // config() ครอบ try/catch ของตัวเองแล้ว ไม่ควร throw มาถึงตรงนี้ได้เลย — เผื่อไว้
     // อีกชั้นเพื่อยืนยันว่าฟังก์ชันนี้ "ห้ามพังเด็ดขาด" ไม่ว่าจะเกิดอะไรขึ้นก่อนหน้า
   }
+  // *** แก้ 2026-09-01 (bug 2) ***: เปลี่ยนโทนจาก "อาจไม่เข้าใจข้อความนี้" (สื่อเหมือนบอท
+  // พลาด) เป็นโทนต้อนรับเชิงบวก — เหตุผลเดียวกับที่แก้ FALLBACK_MESSAGE ใน clinic_config
+  // (ดู update-clinic-config ที่ deploy พร้อมกันรอบนี้) ข้อความนี้เป็นชั้นสำรองกรณี
+  // FALLBACK_MESSAGE ว่าง/Supabase ล่ม จึงต้องปรับให้โทนตรงกันด้วย
   return (
-    "ขอบคุณที่ทักมานะคะ 🙏 ตอนนี้น้องไดโนอาจไม่เข้าใจข้อความนี้ค่ะ " +
+    "สวัสดีค่ะ 😊 น้องไดโนช่วยตอบได้ดีที่สุดสำหรับเรื่องทั่วไปค่ะ " +
     `หากต้องการสอบถามเร่งด่วนหรือเรื่องอาการของลูกน้อย กรุณาโทร ☎️ ${phone} ได้เลยค่ะ`
   );
 }
@@ -225,6 +229,19 @@ async function nextOpenDateLine(fromDate: Date): Promise<string | null> {
   return null;
 }
 
+/** One day's 🟢/🔴 status line + (if closed) the next-open-date line — shared by
+ *  the day-scoped and full CLINIC_STATUS/CLINIC_TIME replies below (see comment
+ *  at that case's usage for why day-scoping exists). */
+async function dayStatusBlock(target: Date, label: string): Promise<string[]> {
+  const status = await getClinicStatus(ymdOf(target));
+  const lines = [(status.isOpen ? "🟢 " : "🔴 ") + `${label} ${status.text}`];
+  if (!status.isOpen) {
+    const line = await nextOpenDateLine(target);
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
 // Ported from resolveUpcomingDateByDayOfMonth_ (old Apps Script, MessageBuilder.gs.js)
 // — day-of-month N -> nearest real date (today counts), rolling to next month if
 // this month's Nth day already passed or doesn't exist (e.g. day=30 in February).
@@ -322,19 +339,34 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
     case "PRODUCT_STOCK_INQUIRY":
       return [{ type: "text", text: await buildProductStockMessage(r.text) }];
+    // *** เพิ่ม 2026-09-01 (bug 4, ยืนยันแล้ว 1 ก.ย.) ***: ข้อความปิดท้ายสนทนา (ขอบคุณ/
+    // รับทราบสั้นๆ) เดิมตกไป default case ได้ FALLBACK_MESSAGE เต็ม (ยาวเกินบริบท) — ตอบ
+    // emoji สั้นแทน ไม่ต้องส่งข้อความยาว (sticker-only message ก็ตอบแบบเดียวกัน แต่ทำที่
+    // routes/line.ts และ routes/messenger.ts เพราะ sticker เป็นคนละ event type จาก text
+    // เลย ไม่มีทางส่งมาถึง detectIntent()/buildReplyMessages() ตรงนี้ได้)
+    case "END_CONVERSATION":
+      return [{ type: "text", text: "🙏" }];
+    // *** แก้ 2026-09-01 (bug 3) ***: เดิมถามแค่ "พรุ่งนี้เปิดไหมคะ" (เจาะจงวันเดียว) ก็ยัง
+    // ได้คำตอบยาวทั้งวันนี้+พรุ่งนี้+สรุปวันหยุดทั้งเดือนเสมอ ไม่ตรงกับสิ่งที่ถาม — ถ้าข้อความ
+    // ระบุ "วันนี้" หรือ "พรุ่งนี้" อย่างใดอย่างหนึ่งเพียงวันเดียว ตอบเฉพาะวันนั้นวันเดียว
+    // ถ้าถามกว้างๆ ไม่ระบุวัน (หรือถามทั้งสองวันพร้อมกัน) คงพฤติกรรมเดิมไว้ (วันนี้+พรุ่งนี้+
+    // สรุปวันหยุด) เพราะนั่นคือคำถามกว้างจริงๆ ที่สมควรได้คำตอบครบ
     case "CLINIC_STATUS":
     case "CLINIC_TIME": {
       const now = new Date(Date.now() + 7 * 3600 * 1000); // Bangkok
-      const today = await getClinicStatus(ymdOf(now));
-      const parts: string[] = [(today.isOpen ? "🟢 " : "🔴 ") + `วันนี้ ${today.text}`];
+      const tomorrowDate = new Date(now.getTime() + 86400000);
+      const mentionsToday = /วันนี้/.test(r.text);
+      const mentionsTomorrow = /พรุ่งนี้/.test(r.text);
 
-      if (!today.isOpen) {
-        const line = await nextOpenDateLine(now);
-        if (line) parts.push(line);
+      if (mentionsTomorrow && !mentionsToday) {
+        return [{ type: "text", text: (await dayStatusBlock(tomorrowDate, "พรุ่งนี้")).join("\n\n") }];
+      }
+      if (mentionsToday && !mentionsTomorrow) {
+        return [{ type: "text", text: (await dayStatusBlock(now, "วันนี้")).join("\n\n") }];
       }
 
-      const tomorrow = await getClinicStatus(ymdOf(new Date(now.getTime() + 86400000)));
-      parts.push((tomorrow.isOpen ? "🟢 " : "🔴 ") + `พรุ่งนี้ ${tomorrow.text}`);
+      const parts = await dayStatusBlock(now, "วันนี้");
+      parts.push(...(await dayStatusBlock(tomorrowDate, "พรุ่งนี้")));
 
       const summary = await closuresListText();
       if (summary) parts.push(summary);
@@ -400,6 +432,21 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       const lineHint =
         "\n\nหากไม่เห็นช่องพิมพ์ข้อความ กรุณากดไอคอนคีย์บอร์ด ⌨️ ที่มุมซ้ายล่างก่อนนะคะ";
       return [{ type: "text", text: channel === "line" ? base + lineHint : base }];
+    }
+    // *** เพิ่ม 2026-09-01 (bug 5) ***: เดิม "นัด" ใน apptChange (bare keyword) ดักคำถามยืนยัน
+    // มาตามนัดเดิม (เช่น "...หรือไปก่อนคะ") ไปตอบเนื้อหาเลื่อนนัดทั้งที่ลูกค้าไม่ได้ขอเลื่อน —
+    // แยก intent นี้ออกมา ตอบยืนยันเป็นประโยคแรกเสมอ ตามด้วยเกณฑ์อายุ/ระยะห่างเข็มที่เกี่ยวข้อง
+    // สั้นๆ (ตอบตรงคำถาม "หรือไปก่อน" ได้เลยในตัว) ไม่ดึงข้อความเลื่อนนัดทั้งก้อนมาซ้ำ
+    case "APPOINTMENT_CONFIRM": {
+      const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+      return [{
+        type: "text",
+        text:
+          "มาตามวันนัดเดิมได้เลยค่ะ 😊\n\n" +
+          "ไม่แนะนำให้มาก่อนวันนัด เนื่องจากระยะห่างระหว่างเข็มวัคซีนมีเกณฑ์กำหนดไว้ตามอายุ มาก่อนอาจยังไม่ครบกำหนดที่จะฉีดได้ค่ะ\n\n" +
+          "หากมีเหตุจำเป็นไม่สามารถมาตามนัดเดิมได้ พาน้องมาหลังวันนัดเดิมได้ค่ะ (พิมพ์ \"เลื่อนนัด\" เพื่อดูรายละเอียดเพิ่มเติม)\n\n" +
+          `หากไม่แน่ใจ สามารถโทรสอบถามคลินิกในเวลาทำการได้ค่ะ ☎️ ${phone}`,
+      }];
     }
     case "APPOINTMENT_CHANGE": {
       // Ported verbatim from buildAppointmentChangeReply() (old Apps Script,
