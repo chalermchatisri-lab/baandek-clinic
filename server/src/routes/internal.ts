@@ -49,12 +49,21 @@ internalApi.post("/internal/stock-alert-run", async (c) => {
   return c.json({ ok: sent, sent });
 });
 
-// ---- GET /internal/line-followers ----
+// ---- GET /debug/line-followers ----
 // TEMPORARY (2026-09-01) — remove after use. Lists LINE OA followers with their
 // displayName + userId, so a staff member's userId can be looked up for config
 // values like STOCK_ALERT_LINE_USERID. The webhook (routes/line.ts) never logs
 // event.source.userId anywhere, so there's no other record of it after the fact.
-internalApi.get("/internal/line-followers", async (c) => {
+//
+// Deliberately its own router (not under internalApi's /internal/* gate) since
+// that gate's secret (INTERNAL_CRON_SECRET) isn't available outside Render's
+// env — gated instead by DEBUG_TOKEN, a fresh one-off env var set just for this.
+export const debugApi = new Hono();
+debugApi.get("/debug/line-followers", async (c) => {
+  const token = c.req.header("x-debug-token") ?? "";
+  if (!env.debugToken || !timingSafeEqual(token, env.debugToken)) {
+    return c.json({ ok: false, error: "unauthorized" }, 401);
+  }
   const userIds: string[] = [];
   let start: string | undefined;
   do {
