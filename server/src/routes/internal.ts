@@ -48,3 +48,38 @@ internalApi.post("/internal/stock-alert-run", async (c) => {
   const sent = await pushMessage(userId, [{ type: "text", text }]);
   return c.json({ ok: sent, sent });
 });
+
+// ---- GET /internal/line-followers ----
+// TEMPORARY (2026-09-01) — remove after use. Lists LINE OA followers with their
+// displayName + userId, so a staff member's userId can be looked up for config
+// values like STOCK_ALERT_LINE_USERID. The webhook (routes/line.ts) never logs
+// event.source.userId anywhere, so there's no other record of it after the fact.
+internalApi.get("/internal/line-followers", async (c) => {
+  const userIds: string[] = [];
+  let start: string | undefined;
+  do {
+    const url = new URL("https://api.line.me/v2/bot/followers/ids");
+    url.searchParams.set("limit", "300");
+    if (start) url.searchParams.set("start", start);
+    const res = await fetch(url, { headers: { authorization: `Bearer ${env.lineToken}` } });
+    if (!res.ok) {
+      return c.json({ ok: false, error: `followers/ids HTTP ${res.status}`, detail: await res.text() }, 502);
+    }
+    const data = (await res.json()) as { userIds: string[]; next?: string };
+    userIds.push(...data.userIds);
+    start = data.next;
+  } while (start);
+
+  const profiles = await Promise.all(
+    userIds.map(async (userId) => {
+      const res = await fetch(`https://api.line.me/v2/bot/profile/${userId}`, {
+        headers: { authorization: `Bearer ${env.lineToken}` },
+      });
+      if (!res.ok) return { userId, displayName: null };
+      const p = (await res.json()) as { displayName?: string };
+      return { userId, displayName: p.displayName ?? null };
+    }),
+  );
+
+  return c.json({ ok: true, count: profiles.length, profiles });
+});
