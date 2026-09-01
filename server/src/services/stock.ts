@@ -21,11 +21,16 @@ export function computeAlertLevel(qty: number, threshold: number): AlertLevel {
   return "green";
 }
 
+// Only items that are both active AND have a real threshold set — a pending
+// item (min_threshold IS NULL, i.e. sync just discovered it and staff hasn't
+// reviewed it yet) has no color/level to compute, so it's excluded here from
+// both the LINE alert and customer-facing stock replies until configured.
 export async function getActiveStockItems(): Promise<StockItem[]> {
   const { data, error } = await admin
     .from("stock_items")
     .select("id,name,category,unit,qty_on_hand,min_threshold")
     .eq("active", true)
+    .not("min_threshold", "is", null)
     .order("category", { ascending: true })
     .order("name", { ascending: true });
   if (error) throw error;

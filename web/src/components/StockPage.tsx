@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { PasswordPrompt } from "./PasswordPrompt";
 
 type AlertLevel = "green" | "yellow" | "red";
+type Status = AlertLevel | "pending";
 
 interface StockItem {
   id: string;
@@ -11,8 +12,9 @@ interface StockItem {
   category: string;
   unit: string | null;
   qty_on_hand: number;
-  min_threshold: number;
+  min_threshold: number | null;
   active: boolean;
+  note: string | null;
   last_synced_at: string | null;
 }
 
@@ -27,23 +29,37 @@ function alertLevel(qty: number, threshold: number): AlertLevel {
   return "green";
 }
 
-const DOT: Record<AlertLevel, string> = { green: "bg-clinic-primary600", yellow: "bg-amber-500", red: "bg-clinic-danger" };
-const BADGE: Record<AlertLevel, string> = {
+// A row with no threshold yet (min_threshold IS NULL) is a brand-new item the
+// sync job just discovered — no color can be computed until staff reviews it.
+function statusOf(item: StockItem): Status {
+  return item.min_threshold === null ? "pending" : alertLevel(item.qty_on_hand, item.min_threshold);
+}
+
+const DOT: Record<Status, string> = {
+  green: "bg-clinic-primary600", yellow: "bg-amber-500", red: "bg-clinic-danger", pending: "bg-clinic-muted",
+};
+const BADGE: Record<Status, string> = {
   green: "bg-clinic-primary050 text-clinic-primary",
   yellow: "bg-amber-50 text-amber-700",
   red: "bg-red-50 text-clinic-danger",
+  pending: "bg-clinic-bg text-clinic-muted",
 };
-const LABEL: Record<AlertLevel, string> = { green: "ปกติ", yellow: "ใกล้หมด", red: "หมด/ใกล้หมดมาก" };
+const LABEL: Record<Status, string> = {
+  green: "ปกติ", yellow: "ใกล้หมด", red: "หมด/ใกล้หมดมาก", pending: "รอตั้งค่า",
+};
 
 export function StockPage() {
   const [items, setItems] = useState<StockItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState(ALL_CATEGORY);
+  const [tab, setTab] = useState<"active" | "inactive">("active");
   const [editing, setEditing] = useState<Partial<StockItem> | null>(null);
   const [isNew, setIsNew] = useState(false);
   const [alertEnabled, setAlertEnabled] = useState<boolean | null>(null);
   const [toggleBusy, setToggleBusy] = useState(false);
+  const [deactivating, setDeactivating] = useState<StockItem | null>(null);
+  const [activating, setActivating] = useState<StockItem | null>(null);
 
   async function load() {
     setLoading(true); setErr(null);
@@ -62,10 +78,12 @@ export function StockPage() {
     () => [ALL_CATEGORY, ...Array.from(new Set(items.map((i) => i.category))).sort()],
     [items],
   );
-  const visible = useMemo(
-    () => (categoryFilter === ALL_CATEGORY ? items : items.filter((i) => i.category === categoryFilter))
-      .filter((i) => i.active),
-    [items, categoryFilter],
+  const activeItems = useMemo(() => items.filter((i) => i.active), [items]);
+  const inactiveItems = useMemo(() => items.filter((i) => !i.active), [items]);
+  const pendingCount = useMemo(() => activeItems.filter((i) => i.min_threshold === null).length, [activeItems]);
+  const visibleActive = useMemo(
+    () => (categoryFilter === ALL_CATEGORY ? activeItems : activeItems.filter((i) => i.category === categoryFilter)),
+    [activeItems, categoryFilter],
   );
 
   async function toggleAlert() {
@@ -81,8 +99,25 @@ export function StockPage() {
   }
 
   function openNew() {
-    setEditing({ name: "", category: "", unit: "", qty_on_hand: 0, min_threshold: 0, active: true });
+    setEditing({ name: "", category: "", unit: "", qty_on_hand: 0, min_threshold: 0, active: true, note: null });
     setIsNew(true);
+  }
+
+  async function confirmActivate() {
+    if (!activating) return;
+    const { error } = await supabase.from("stock_items").update({ active: true }).eq("id", activating.id);
+    setActivating(null);
+    if (!error) load();
+  }
+
+  async function confirmDeactivate(note: string) {
+    if (!deactivating) return;
+    const { error } = await supabase
+      .from("stock_items")
+      .update({ active: false, note: note.trim() || null })
+      .eq("id", deactivating.id);
+    setDeactivating(null);
+    if (!error) load();
   }
 
   return (
@@ -114,62 +149,118 @@ export function StockPage() {
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {categories.map((c) => (
-          <button key={c} onClick={() => setCategoryFilter(c)}
-            className={`rounded-full border px-3 py-1.5 text-sm transition ${
-              categoryFilter === c
-                ? "border-clinic-primary600 bg-clinic-primary050 text-clinic-primary"
-                : "border-clinic-border text-clinic-muted hover:bg-clinic-bg"
-            }`}>
-            {c}
-          </button>
-        ))}
+      <div className="mb-4 flex gap-1 border-b border-clinic-border">
+        <button onClick={() => setTab("active")}
+          className={`flex items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition ${
+            tab === "active" ? "border-clinic-primary600 text-clinic-primary" : "border-transparent text-clinic-muted hover:text-clinic-ink"
+          }`}>
+          รายการที่ใช้งาน
+          {pendingCount > 0 && (
+            <span className="rounded-full bg-clinic-bg px-1.5 py-0.5 text-xs text-clinic-muted">รอตั้งค่า {pendingCount}</span>
+          )}
+        </button>
+        <button onClick={() => setTab("inactive")}
+          className={`border-b-2 px-3 py-2 text-sm font-medium transition ${
+            tab === "inactive" ? "border-clinic-primary600 text-clinic-primary" : "border-transparent text-clinic-muted hover:text-clinic-ink"
+          }`}>
+          รายการที่หยุดใช้ ({inactiveItems.length})
+        </button>
       </div>
+
+      {tab === "active" && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {categories.map((c) => (
+            <button key={c} onClick={() => setCategoryFilter(c)}
+              className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                categoryFilter === c
+                  ? "border-clinic-primary600 bg-clinic-primary050 text-clinic-primary"
+                  : "border-clinic-border text-clinic-muted hover:bg-clinic-bg"
+              }`}>
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
 
       {err && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-clinic-danger">โหลดไม่สำเร็จ: {err}</div>}
 
-      <div className="overflow-x-auto rounded-xl border border-clinic-border bg-white scroll-thin">
-        <table className="w-full text-left text-sm">
-          <thead className="border-b border-clinic-border bg-clinic-bg text-xs uppercase tracking-wide text-clinic-muted">
-            <tr>
-              <th className="px-4 py-3 font-medium">สถานะ</th>
-              <th className="px-4 py-3 font-medium">ชื่อสินค้า</th>
-              <th className="px-4 py-3 font-medium">หมวด</th>
-              <th className="px-4 py-3 font-medium">คงเหลือ</th>
-              <th className="px-4 py-3 font-medium">ขั้นต่ำ</th>
-              <th className="px-4 py-3" />
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">กำลังโหลด…</td></tr>
-            ) : visible.length === 0 ? (
-              <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">ไม่มีรายการในหมวดนี้</td></tr>
-            ) : visible.map((item) => {
-              const level = alertLevel(item.qty_on_hand, item.min_threshold);
-              return (
+      {tab === "active" ? (
+        <div className="overflow-x-auto rounded-xl border border-clinic-border bg-white scroll-thin">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-clinic-border bg-clinic-bg text-xs uppercase tracking-wide text-clinic-muted">
+              <tr>
+                <th className="px-4 py-3 font-medium">สถานะ</th>
+                <th className="px-4 py-3 font-medium">ชื่อสินค้า</th>
+                <th className="px-4 py-3 font-medium">หมวด</th>
+                <th className="px-4 py-3 font-medium">คงเหลือ</th>
+                <th className="px-4 py-3 font-medium">ขั้นต่ำ</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">กำลังโหลด…</td></tr>
+              ) : visibleActive.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">ไม่มีรายการในหมวดนี้</td></tr>
+              ) : visibleActive.map((item) => {
+                const status = statusOf(item);
+                return (
+                  <tr key={item.id} className="border-b border-clinic-border/60 last:border-0 hover:bg-clinic-primary050/40">
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs ${BADGE[status]}`}>
+                        <span className={`h-2 w-2 rounded-full ${DOT[status]}`} />
+                        {LABEL[status]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 align-top text-clinic-ink">{item.name}</td>
+                    <td className="px-4 py-3 align-top text-clinic-muted">{item.category}</td>
+                    <td className="px-4 py-3 align-top text-clinic-ink">{item.qty_on_hand} {item.unit ?? ""}</td>
+                    <td className="px-4 py-3 align-top text-clinic-muted">{item.min_threshold ?? "—"}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => setDeactivating(item)}
+                        className="mr-3 text-sm font-medium text-clinic-muted hover:underline">หยุดใช้</button>
+                      <button onClick={() => { setEditing(item); setIsNew(false); }}
+                        className="text-sm font-medium text-clinic-primary600 hover:underline">แก้ไข</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-xl border border-clinic-border bg-white scroll-thin">
+          <table className="w-full text-left text-sm">
+            <thead className="border-b border-clinic-border bg-clinic-bg text-xs uppercase tracking-wide text-clinic-muted">
+              <tr>
+                <th className="px-4 py-3 font-medium">ชื่อสินค้า</th>
+                <th className="px-4 py-3 font-medium">หมวด</th>
+                <th className="px-4 py-3 font-medium">หมายเหตุ</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={4} className="px-4 py-10 text-center text-clinic-muted">กำลังโหลด…</td></tr>
+              ) : inactiveItems.length === 0 ? (
+                <tr><td colSpan={4} className="px-4 py-10 text-center text-clinic-muted">ไม่มีรายการที่หยุดใช้</td></tr>
+              ) : inactiveItems.map((item) => (
                 <tr key={item.id} className="border-b border-clinic-border/60 last:border-0 hover:bg-clinic-primary050/40">
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs ${BADGE[level]}`}>
-                      <span className={`h-2 w-2 rounded-full ${DOT[level]}`} />
-                      {LABEL[level]}
-                    </span>
-                  </td>
                   <td className="px-4 py-3 align-top text-clinic-ink">{item.name}</td>
                   <td className="px-4 py-3 align-top text-clinic-muted">{item.category}</td>
-                  <td className="px-4 py-3 align-top text-clinic-ink">{item.qty_on_hand} {item.unit ?? ""}</td>
-                  <td className="px-4 py-3 align-top text-clinic-muted">{item.min_threshold}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-3 align-top text-clinic-muted">{item.note || "—"}</td>
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button onClick={() => setActivating(item)}
+                      className="mr-3 text-sm font-medium text-clinic-primary600 hover:underline">เปิดใช้</button>
                     <button onClick={() => { setEditing(item); setIsNew(false); }}
-                      className="text-sm font-medium text-clinic-primary600 hover:underline">แก้ไข</button>
+                      className="text-sm font-medium text-clinic-muted hover:underline">แก้ไข</button>
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {editing && (
         <StockEditModal
@@ -180,6 +271,67 @@ export function StockPage() {
           onSaved={() => { setEditing(null); load(); }}
         />
       )}
+
+      {deactivating && (
+        <DeactivateModal
+          itemName={deactivating.name}
+          onCancel={() => setDeactivating(null)}
+          onConfirm={confirmDeactivate}
+        />
+      )}
+
+      {activating && (
+        <PasswordPrompt
+          actionLabel="เปิดใช้รายการนี้"
+          onCancel={() => setActivating(null)}
+          onConfirm={confirmActivate}
+        />
+      )}
+    </div>
+  );
+}
+
+// Collects an optional note, then hands off to the same admin-password gate
+// as every other write in this page, before actually deactivating.
+function DeactivateModal({ itemName, onCancel, onConfirm }: {
+  itemName: string; onCancel: () => void; onConfirm: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <PasswordPrompt
+        actionLabel="หยุดใช้รายการนี้"
+        onCancel={() => setConfirming(false)}
+        onConfirm={() => onConfirm(note)}
+      />
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-0 sm:items-center sm:p-4" onClick={onCancel}>
+      <div className="w-full max-w-sm rounded-t-2xl bg-white p-5 shadow-xl sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-base font-semibold text-clinic-ink">หยุดใช้ "{itemName}"</h3>
+        <p className="mt-1 text-sm text-clinic-muted">
+          รายการนี้จะถูกซ่อนจากรายการหลักและไม่รวมในแจ้งเตือน LINE — ใส่หมายเหตุไว้ได้ (ไม่บังคับ)
+        </p>
+        <textarea
+          autoFocus
+          rows={3}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder='เช่น "เลิกใช้ถาวร" หรือ "รอดูอาจใช้ใหม่"'
+          className="mt-3 w-full rounded-lg border border-clinic-border px-3 py-2 text-sm focus:border-clinic-primary600 focus:ring-0"
+        />
+        <div className="mt-5 flex justify-end gap-2">
+          <button onClick={onCancel} className="rounded-lg border border-clinic-border px-4 py-2 text-sm">ยกเลิก</button>
+          <button onClick={() => setConfirming(true)}
+            className="rounded-lg bg-clinic-primary px-4 py-2 text-sm font-medium text-white hover:bg-clinic-primary600">
+            หยุดใช้
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -198,7 +350,7 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
     if (!form.name?.trim()) { setError("กรอกชื่อสินค้า"); return false; }
     if (!form.category?.trim()) { setError("กรอกหมวดหมู่"); return false; }
     if (form.qty_on_hand == null || form.qty_on_hand < 0) { setError("จำนวนคงเหลือต้องไม่ติดลบ"); return false; }
-    if (form.min_threshold == null || form.min_threshold < 0) { setError("ขั้นต่ำต้องไม่ติดลบ"); return false; }
+    if (form.min_threshold != null && form.min_threshold < 0) { setError("ขั้นต่ำต้องไม่ติดลบ"); return false; }
     setError(null);
     return true;
   }
@@ -215,13 +367,15 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
 
   async function doSave() {
     setSaving(true); setSaveErr(null);
+    const active = form.active ?? true;
     const payload = {
       name: form.name!.trim(),
       category: form.category!.trim(),
       unit: form.unit?.trim() || null,
       qty_on_hand: form.qty_on_hand,
-      min_threshold: form.min_threshold,
-      active: form.active ?? true,
+      min_threshold: form.min_threshold ?? null,
+      active,
+      note: active ? null : (form.note?.trim() || null),
     };
     const res = isNew
       ? await supabase.from("stock_items").insert(payload)
@@ -239,6 +393,7 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
   }
 
   const inputCls = "w-full rounded-lg border border-clinic-border bg-white px-3 py-2 text-sm focus:border-clinic-primary600 focus:ring-0";
+  const isPending = form.min_threshold == null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-0 sm:items-center sm:p-4" onClick={onClose}>
@@ -248,6 +403,12 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
           <h2 className="text-lg font-semibold text-clinic-ink">{isNew ? "เพิ่มรายการสต็อก" : "แก้ไขรายการสต็อก"}</h2>
           <button onClick={onClose} className="rounded-lg px-2 py-1 text-clinic-muted hover:bg-clinic-bg">✕</button>
         </div>
+
+        {isPending && !isNew && (
+          <div className="mb-4 rounded-lg bg-clinic-bg px-3 py-2 text-sm text-clinic-muted">
+            รายการนี้ยังไม่มีการตั้งค่าขั้นต่ำ (รอตั้งค่า) — กรอกขั้นต่ำด้านล่างเพื่อให้เริ่มคำนวณสถานะและรวมในแจ้งเตือนได้
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="block sm:col-span-2">
@@ -272,17 +433,28 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
               onChange={(e) => setForm((f) => ({ ...f, qty_on_hand: Number(e.target.value) }))} />
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm font-medium text-clinic-ink">ขั้นต่ำก่อนแจ้งเตือน <span className="text-clinic-accent">*</span></span>
-            <input type="number" min={0} className={inputCls} value={form.min_threshold ?? 0}
-              onChange={(e) => setForm((f) => ({ ...f, min_threshold: Number(e.target.value) }))} />
+            <span className="mb-1 block text-sm font-medium text-clinic-ink">
+              ขั้นต่ำก่อนแจ้งเตือน {isPending && <span className="font-normal text-clinic-muted">(ยังไม่ตั้งค่า)</span>}
+            </span>
+            <input type="number" min={0} className={inputCls} value={form.min_threshold ?? ""}
+              placeholder="รอตั้งค่า"
+              onChange={(e) => setForm((f) => ({ ...f, min_threshold: e.target.value === "" ? null : Number(e.target.value) }))} />
           </label>
           <label className="flex items-center gap-2 sm:col-span-2">
-            <button type="button" onClick={() => setForm((f) => ({ ...f, active: !f.active }))}
+            <button type="button" onClick={() => setForm((f) => ({ ...f, active: !(f.active ?? true) }))}
               className={`flex h-8 w-14 items-center rounded-full px-1 transition ${form.active ?? true ? "bg-clinic-primary600" : "bg-clinic-border"}`}>
               <span className={`h-6 w-6 rounded-full bg-white shadow transition ${(form.active ?? true) ? "translate-x-6" : ""}`} />
             </button>
             <span className="text-sm text-clinic-ink">แสดงในรายการ/แจ้งเตือน</span>
           </label>
+          {!(form.active ?? true) && (
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-sm font-medium text-clinic-ink">หมายเหตุ (หยุดใช้)</span>
+              <textarea rows={2} className={inputCls} value={form.note ?? ""}
+                placeholder='เช่น "เลิกใช้ถาวร" หรือ "รอดูอาจใช้ใหม่"'
+                onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
+            </label>
+          )}
         </div>
 
         {error && <div className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-clinic-danger">{error}</div>}

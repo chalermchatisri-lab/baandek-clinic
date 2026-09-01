@@ -312,6 +312,15 @@ create index if not exists idx_incident_status on incident_log (status);
 --   sync_mdb_stock(), but name/category/unit/min_threshold become
 --   dashboard-owned once a row exists — sync only ever touches qty_on_hand
 --   and last_synced_at on conflict, never overwriting a staff edit.
+--
+--   min_threshold nullable (chunk 3): a brand-new item sync discovers for the
+--   first time is inserted with min_threshold = NULL ("รอตั้งค่า"/pending) —
+--   deliberately ignoring the .mdb's own "จำนวนต่ำสุด" field, since that's
+--   Doctor's own reorder point, not necessarily one Kallaya has ever reviewed.
+--   A pending item shows no color/level and is excluded from getActiveStockItems()
+--   (so also excluded from both the LINE alert and customer stock replies)
+--   until a real threshold is set via the dashboard. `note` is a free-text
+--   reason staff can attach when marking an item inactive ("เลิกใช้ถาวร" etc).
 -- ---------------------------------------------------------------------------
 create table if not exists stock_items (
   id              uuid primary key default gen_random_uuid(),
@@ -320,14 +329,61 @@ create table if not exists stock_items (
   category        text not null,                     -- ยา | นม | วัคซีน ... free text, not an enum
   unit            text,
   qty_on_hand     int not null default 0,
-  min_threshold   int not null default 0,
+  min_threshold   int,                                -- null = pending ("รอตั้งค่า"), not yet reviewed by staff
   active          boolean not null default true,
+  note            text,                               -- staff-entered reason when active is toggled off
   last_synced_at  timestamptz,
   updated_at      timestamptz not null default now()
 );
 create index if not exists idx_stock_items_category on stock_items (category);
 create trigger trg_stock_items_updated before update on stock_items
   for each row execute function set_updated_at();
+
+-- Upserts one sync batch from Doctor's [รายการยา] table (called by
+-- StockSync/sync-stock.ps1, ~20:00 daily). Existing rows (matched by
+-- mdb_item_id) only ever get qty_on_hand/last_synced_at touched — name/
+-- category/unit/min_threshold/active/note stay dashboard-owned. A new
+-- mdb_item_id creates a row with min_threshold = NULL (pending) regardless
+-- of what the payload's own min_threshold carries — see comment above.
+create or replace function public.sync_mdb_stock(payload jsonb)
+returns table(inserted_count integer, updated_count integer)
+language plpgsql
+set search_path to 'public'
+as $function$
+declare
+  v_inserted_count integer;
+  v_updated_count integer;
+begin
+  with upserted as (
+    insert into stock_items (mdb_item_id, name, category, unit, qty_on_hand, min_threshold, active, last_synced_at, updated_at)
+    select
+      (r->>'mdb_item_id')::int,
+      r->>'name',
+      r->>'category',
+      nullif(r->>'unit',''),
+      coalesce((r->>'qty_on_hand')::int, 0),
+      null,
+      true,
+      now(),
+      now()
+    from jsonb_array_elements(payload) as r
+    on conflict (mdb_item_id) do update set
+      qty_on_hand    = excluded.qty_on_hand,
+      last_synced_at = now(),
+      updated_at     = now()
+    returning (xmax = 0) as was_insert
+  )
+  select
+    count(*) filter (where was_insert),
+    count(*) filter (where not was_insert)
+  into v_inserted_count, v_updated_count
+  from upserted;
+
+  inserted_count := v_inserted_count;
+  updated_count := v_updated_count;
+  return next;
+end;
+$function$;
 
 -- Minimal per-user role tag for restricting the dashboard UI (e.g. Kallaya's
 -- stock-only account). No row = full access (existing accounts unaffected).
