@@ -86,16 +86,22 @@ export function StockPage() {
     [activeItems, categoryFilter],
   );
 
+  // *** แก้บั๊ก 2026-09-02 ***: เดิมใช้ .update().eq("key", ...) — ถ้าแถว
+  // STOCK_ALERT_ENABLED ไม่มีอยู่ใน clinic_config เลย (แบบที่เจอจริง — ไม่เคย insert
+  // ไว้ตั้งแต่แรก) update() จะจับคู่ 0 แถวและไม่ error เลย ทำให้ state ในหน้าเว็บดู
+  // เหมือนกดติด (optimistic update) แต่ไม่มีอะไรถูกบันทึกจริง พอโหลดหน้าใหม่เลยเห็นปิด
+  // เสมอ — เปลี่ยนเป็น upsert (มี key='STOCK_ALERT_ENABLED' เป็น primary key อยู่แล้ว)
+  // เพื่อกันบั๊กคลาสเดียวกันไม่ให้เกิดซ้ำได้อีกไม่ว่าแถวจะมีอยู่ก่อนหรือไม่
   async function toggleAlert() {
     if (alertEnabled === null || toggleBusy) return;
     setToggleBusy(true);
     const next = !alertEnabled;
     const { error } = await supabase
       .from("clinic_config")
-      .update({ value: next ? "true" : "false" })
-      .eq("key", "STOCK_ALERT_ENABLED");
+      .upsert({ key: "STOCK_ALERT_ENABLED", value: next ? "true" : "false", category: "BOT" });
     setToggleBusy(false);
     if (!error) setAlertEnabled(next);
+    else console.error("toggleAlert: upsert failed", error.message);
   }
 
   function openNew() {
