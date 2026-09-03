@@ -1,7 +1,7 @@
 import { admin } from "../lib/supabase";
 import { env } from "../lib/env";
 import { detectIntent } from "./intent";
-import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeGroupVaccineList, buildAgeCardFlex } from "./vaccine";
+import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeGroupVaccineList, buildAgeCardFlex, BRAND_GREEN, BRAND_GREEN_DARK, BRAND_CREAM, TEXT_DARK, TEXT_MUTED } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone } from "./appointmentCheck";
 import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockReply, buildOverviewStockReply } from "./stock";
@@ -9,6 +9,49 @@ import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockR
 export type TextMessage = { type: "text"; text: string; quickReply?: unknown };
 export type FlexMessage = { type: "flex"; altText: string; contents: Record<string, unknown>; quickReply?: unknown };
 export type ReplyMessage = TextMessage | FlexMessage;
+
+// *** เพิ่ม 2026-09-03 (รอบเย็น) ***: การ์ด Flex ทั่วไป (ไม่ผูกกับวัคซีน) ใช้ธีมสีเดียวกับ
+// การ์ดวัคซีน (BRAND_GREEN/BRAND_CREAM จาก vaccine.ts) ให้บอททั้งตัวดูเป็นแบรนด์เดียวกัน —
+// LINE เท่านั้น (Flex เป็นฟอร์แมต LINE) Messenger ยังใช้ข้อความล้วนเดิมทุกจุด
+const MENU_HERO_BASE = `${env.supabaseUrl}/storage/v1/object/public/menu-hero`;
+function buildSimpleFlexCard(opts: {
+  title: string;
+  heroUrl: string;
+  bodyLines: string[];
+  buttonLabel?: string;
+  buttonUri?: string;
+  altText: string;
+}): FlexMessage {
+  const contents: Record<string, unknown> = {
+    type: "bubble",
+    hero: { type: "image", url: opts.heroUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" },
+    body: {
+      type: "box",
+      layout: "vertical",
+      backgroundColor: BRAND_CREAM,
+      paddingAll: "16px",
+      contents: [
+        { type: "text", text: opts.title, weight: "bold", size: "md", color: TEXT_DARK, wrap: true },
+        ...opts.bodyLines.map((line) => ({ type: "text", text: line, wrap: true, size: "sm", color: TEXT_MUTED, margin: "sm" })),
+      ],
+    },
+  };
+  if (opts.buttonLabel && opts.buttonUri) {
+    contents.footer = {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "12px",
+      contents: [{
+        type: "button",
+        style: "primary",
+        color: BRAND_GREEN,
+        height: "sm",
+        action: { type: "uri", label: opts.buttonLabel, uri: opts.buttonUri },
+      }],
+    };
+  }
+  return { type: "flex", altText: opts.altText, contents };
+}
 
 // Thai date: "2026-08-22" -> "22 ส.ค. 2569"
 const TH_MON = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
@@ -470,11 +513,19 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       }];
     case "LOCATION": {
       const [maps, addr] = await Promise.all([config("GOOGLE_MAPS"), config("ADDRESS")]);
-      return [{
-        type: "text",
-        text: `📍 คลินิกบ้านเด็ก\n\n${addr ?? ""}` +
-              (maps ? `\n\nเปิดเส้นทางใน Google Maps:\n${maps}` : ""),
-      }];
+      const text = `📍 คลินิกบ้านเด็ก\n\n${addr ?? ""}` +
+        (maps ? `\n\nเปิดเส้นทางใน Google Maps:\n${maps}` : "");
+      if (channel === "line") {
+        return [buildSimpleFlexCard({
+          title: "📍 คลินิกบ้านเด็ก",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_location.png`,
+          bodyLines: [addr ?? ""],
+          buttonLabel: maps ? "เปิดเส้นทางใน Google Maps" : undefined,
+          buttonUri: maps ?? undefined,
+          altText: text,
+        })];
+      }
+      return [{ type: "text", text }];
     }
     case "APPOINTMENT_CHECK": {
       // The "เช็คนัดหมาย" booking-menu button (and natural "เช็คนัด"/"ตรวจสอบนัด"
@@ -543,26 +594,42 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
     }
     case "SERVICES": {
       const phone = await config("PHONE");
-      return [{
-        type: "text",
-        text: "🏥 บริการของเรา\n\n" +
-          "🩺 คลินิกตรวจโรคทั่วไป\n" +
-          "ราคา 300–1,000+ บาท (ขึ้นกับค่ายาและเวชภัณฑ์)\n" +
-          "(รวมกลุ่มอาการป่วยทั่วไปและอาการปวดศีรษะ)\n\n" +
-          "👶 คลินิกสุขภาพเด็กดี\n" +
-          "รวมคำแนะนำด้านพัฒนาการและการเลี้ยงดูเด็ก\n\n" +
-          "กรุณาสอบถามราคาและรายละเอียดเพิ่มเติมกับเจ้าหน้าที่ก่อนเข้ารับบริการค่ะ" +
-          (phone ? `\n☎️ ${phone}` : ""),
-      }];
+      const text = "🏥 บริการของเรา\n\n" +
+        "🩺 คลินิกตรวจโรคทั่วไป\n" +
+        "ราคา 300–1,000+ บาท (ขึ้นกับค่ายาและเวชภัณฑ์)\n" +
+        "(รวมกลุ่มอาการป่วยทั่วไปและอาการปวดศีรษะ)\n\n" +
+        "👶 คลินิกสุขภาพเด็กดี\n" +
+        "รวมคำแนะนำด้านพัฒนาการและการเลี้ยงดูเด็ก\n\n" +
+        "กรุณาสอบถามราคาและรายละเอียดเพิ่มเติมกับเจ้าหน้าที่ก่อนเข้ารับบริการค่ะ" +
+        (phone ? `\n☎️ ${phone}` : "");
+      if (channel === "line") {
+        return [buildSimpleFlexCard({
+          title: "🏥 บริการของเรา",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_service.png`,
+          bodyLines: [
+            "🩺 คลินิกตรวจโรคทั่วไป — 300–1,000+ บาท (ขึ้นกับค่ายาและเวชภัณฑ์)",
+            "👶 คลินิกสุขภาพเด็กดี — คำแนะนำด้านพัฒนาการและการเลี้ยงดูเด็ก",
+            "กรุณาสอบถามราคาและรายละเอียดเพิ่มเติมกับเจ้าหน้าที่ก่อนเข้ารับบริการค่ะ" + (phone ? ` ☎️ ${phone}` : ""),
+          ],
+          altText: text,
+        })];
+      }
+      return [{ type: "text", text }];
     }
     case "HOLIDAYS":
     case "CLOSURE_ANNOUNCEMENT": {
       const summary = await closuresSummaryText();
       const body = summary || "ช่วงนี้คลินิกไม่มีวันหยุดพิเศษค่ะ 😊 เปิดตามเวลาปกติ";
-      return [{
-        type: "text",
-        text: "📅 วันหยุดของคลินิกบ้านเด็ก\n\n" + body + "\n\nกรุณาวางแผนก่อนเข้ารับบริการนะคะ",
-      }];
+      const text = "📅 วันหยุดของคลินิกบ้านเด็ก\n\n" + body + "\n\nกรุณาวางแผนก่อนเข้ารับบริการนะคะ";
+      if (channel === "line") {
+        return [buildSimpleFlexCard({
+          title: "📅 วันหยุดของคลินิกบ้านเด็ก",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_holidays.png`,
+          bodyLines: [body, "กรุณาวางแผนก่อนเข้ารับบริการนะคะ"],
+          altText: text,
+        })];
+      }
+      return [{ type: "text", text }];
     }
     case "NEWS": {
       const items = [
@@ -617,18 +684,45 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       if (fbPage) lines.push(`👍 Facebook: https://www.facebook.com/${fbPage}`);
       if (lineOa) lines.push(`🟢 LINE: ${lineOa}`);
       lines.push("", "ยินดีให้บริการในเวลาทำการค่ะ");
-      return [{ type: "text", text: lines.join("\n") }];
+      const text = lines.join("\n");
+      if (channel === "line") {
+        const bodyLines: string[] = [];
+        if (phone) bodyLines.push(`☎️ โทร: ${phone}`);
+        if (fbPage) bodyLines.push(`👍 Facebook: facebook.com/${fbPage}`);
+        if (lineOa) bodyLines.push(`🟢 LINE: ${lineOa}`);
+        bodyLines.push("ยินดีให้บริการในเวลาทำการค่ะ");
+        return [buildSimpleFlexCard({
+          title: "📞 ติดต่อพนักงาน",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_contact.png`,
+          bodyLines,
+          buttonLabel: phone ? `โทร ${phone}` : undefined,
+          buttonUri: phone ? `tel:${phone}` : undefined,
+          altText: text,
+        })];
+      }
+      return [{ type: "text", text }];
     }
     case "BOOKING_MENU": {
       const liffUrl = env.liffId ? `https://liff.line.me/${env.liffId}` : "";
+      const text = "ต้องการจองคิว หรือเช็คนัดหมายคะ? 🗓️\nเลือกเมนูด้านล่างได้เลยค่ะ 👇";
+      if (channel === "line") {
+        const card = buildSimpleFlexCard({
+          title: "🗓️ จองคิว / เช็คนัดหมาย",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_booking.png`,
+          bodyLines: ["ต้องการจองคิวใหม่ หรือเช็คนัดหมายที่จองไว้แล้ว เลือกได้เลยค่ะ"],
+          buttonLabel: liffUrl ? "📅 จองคิว" : undefined,
+          buttonUri: liffUrl || undefined,
+          altText: text,
+        });
+        // "เช็คนัดหมาย" เป็น quick-reply แยก เพราะ Flex footer รองรับปุ่มหลักได้ปุ่มเดียวต่อ
+        // การ์ด — quickReply เป็นฟีเจอร์แยก ผูกกับ message ประเภทไหนก็ได้ (ดูหมายเหตุเดิมที่
+        // การ์ดเลือกอายุวัคซีนใช้ pattern เดียวกันนี้)
+        return [{ ...card, quickReply: { items: [{ type: "action", action: { type: "message", label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" } }] } }];
+      }
       const items: unknown[] = [];
       if (liffUrl) items.push({ type: "action", action: { type: "uri", label: "📅 จองคิว", uri: liffUrl } });
       items.push({ type: "action", action: { type: "message", label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" } });
-      return [{
-        type: "text",
-        text: "ต้องการจองคิว หรือเช็คนัดหมายคะ? 🗓️\nเลือกเมนูด้านล่างได้เลยค่ะ 👇",
-        quickReply: { items },
-      }];
+      return [{ type: "text", text, quickReply: { items } }];
     }
     default: {
       // *** แก้ 2026-08-30 ***: เปลี่ยน hardcoded ultimate fallback จาก "สวัสดีค่ะ..."

@@ -263,11 +263,11 @@ export async function buildAgeGroupVaccineList(
 }
 
 // ธีมแบรนด์ตาม Notion "🎨 Flex Message Spec" (31 ส.ค. 2569): เขียว #A5CE89 / ครีม #FFF6E6
-const BRAND_GREEN = "#A5CE89";
-const BRAND_GREEN_DARK = "#6C9652";
-const BRAND_CREAM = "#FFF6E6";
-const TEXT_DARK = "#3C3C3C";
-const TEXT_MUTED = "#8C8C8C";
+export const BRAND_GREEN = "#A5CE89";
+export const BRAND_GREEN_DARK = "#6C9652";
+export const BRAND_CREAM = "#FFF6E6";
+export const TEXT_DARK = "#3C3C3C";
+export const TEXT_MUTED = "#8C8C8C";
 
 /** LINE Flex Message version of the age-group card — hero image + ธีมแบรนด์
  *  เขียว/ครีม ต่อจาก query เดียวกับ buildAgeGroupVaccineList() ด้านบน (DB สดทุกครั้ง)
