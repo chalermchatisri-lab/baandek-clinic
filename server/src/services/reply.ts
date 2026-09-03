@@ -169,17 +169,19 @@ const AGE_CODE_MAP: Record<number, { codes: string[]; label: string; hero: strin
 const AGE_GROUP_4_12Y = { codes: AGE_GROUP_4_TO_12_YEARS, label: "4-12 ปี", hero: `${HERO_BASE}/vaccine_hero_4_12Y.png` };
 
 /** ช่วงอายุเดียว ตอบเป็น Flex (LINE) หรือข้อความล้วน (Messenger, Flex เป็นฟอร์แมต LINE
- *  เท่านั้น) — ทั้งคู่ query DB สดเหมือนกัน ต่างกันแค่รูปแบบการแสดงผล */
+ *  เท่านั้น) — ทั้งคู่ query DB สดเหมือนกัน ต่างกันแค่รูปแบบการแสดงผล
+ *  ageMonths: null สำหรับก้อนอายุกว้างอย่าง "4-12 ปี" (ใช้ตัดสินกฎอายุของไข้หวัดใหญ่ในตัว vaccine.ts) */
 async function buildAgeGroupReply(
   group: { codes: string[]; label: string; hero: string },
   link: string,
   channel: Channel,
+  ageMonths: number | null,
 ): Promise<ReplyMessage[]> {
   if (channel === "line") {
-    const { flex } = await buildAgeCardFlex(group.codes, group.label, group.hero, link);
+    const { flex } = await buildAgeCardFlex(group.codes, group.label, group.hero, link, ageMonths);
     return [flex as unknown as FlexMessage];
   }
-  return [{ type: "text", text: await buildAgeGroupVaccineList(group.codes, group.label, link) }];
+  return [{ type: "text", text: await buildAgeGroupVaccineList(group.codes, group.label, link, ageMonths) }];
 }
 
 async function buildIncompletePhoneMessage(): Promise<string> {
@@ -328,13 +330,13 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
         // The "4-12 ปี" picker button is a range, not a single age — matched as
         // literal text rather than going through r.ageMonths (see AGE_PICKER_ITEMS).
         if (text.includes("4-12 ปี")) {
-          return await buildAgeGroupReply(AGE_GROUP_4_12Y, link, channel);
+          return await buildAgeGroupReply(AGE_GROUP_4_12Y, link, channel, null);
         }
         // Age already clear -> answer directly, skip the picker (decided: don't
         // re-ask what the user already told us).
         const ageGroup = r.ageMonths != null ? AGE_CODE_MAP[r.ageMonths] : undefined;
         if (ageGroup) {
-          return await buildAgeGroupReply(ageGroup, link, channel);
+          return await buildAgeGroupReply(ageGroup, link, channel, r.ageMonths ?? null);
         }
 
         // No age given, or an age outside every known bucket -> show the picker.

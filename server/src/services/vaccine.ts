@@ -110,77 +110,153 @@ const AGE_GROUP_FOOTER_NOTE =
   "ชนิดวัคซีนและจำนวนเข็มอาจแตกต่างกันตามประวัติวัคซีนเดิม กรุณานำสมุดวัคซีนให้แพทย์ตรวจและพิจารณาก่อนรับวัคซีนค่ะ";
 
 type DoseRow = {
+  age_group: string;
   vaccine_id: string;
   name_th_override: string | null;
   status: string | null;
-  vaccines: { name_th: string | null; priority: string | null; status: string | null };
+  vaccines: { name_th: string | null; priority: string | null; status: string | null; group_code: string | null };
 };
 
-// "Recommended" (เช่น RSV ตอน 2 เดือน, ไข้หวัดใหญ่ตอน 6 เดือน) จัดเป็น "พิจารณาตามเงื่อนไข"
-// เหมือนข้อความ hardcode เดิม ไม่ใช่ "ตามเกณฑ์อายุ" ตามที่ Yai ยืนยัน (3 ก.ย. 2569)
+// "Recommended" (เช่น RSV, ไข้หวัดใหญ่) จัดเป็น "พิจารณาตามเงื่อนไข" โดย default เหมือนข้อความ
+// hardcode เดิม — ยกเว้นไข้หวัดใหญ่ที่มีกฎอายุพิเศษของตัวเอง ดู INFLUENZA ใน buildAgeGroupBuckets()
 const CONDITIONAL_PRIORITIES = new Set(["Optional", "Risk-based", "Recommended"]);
+
+// *** เพิ่ม 2026-09-03 (รอบบ่าย) ***: กลุ่มวัคซีนที่มีหลายชนิด/ยี่ห้อให้เลือกได้ ณ อายุเดียวกัน
+// (ไม่ต้องรับครบทุกตัว) — ถ้าอายุนั้นมีมากกว่า 1 ชนิดในกลุ่มเดียวกันจริง ให้ยุบรวมเป็นบรรทัดเดียว
+// "ชื่อกลุ่ม (มี N ชนิด สอบถามแพทย์ก่อนรับ)" กันผู้ปกครองเข้าใจผิดว่าต้องรับทุกชนิด — ไม่รวม
+// DTP_POLIO_COMBO เพราะ 4-in-1/5-in-1/6-in-1 ป้องกันโรคไม่เท่ากันจริง (คนละสูตร ไม่ใช่ยี่ห้อทางเลือก)
+// ยืนยันกับ Yai แล้ว
+const GROUP_DISPLAY_NAME: Record<string, string> = {
+  ROTAVIRUS: "วัคซีนโรต้า",
+  PCV: "วัคซีนปอดบวม",
+  RSV: "ภูมิสำเร็จรูปป้องกัน RSV",
+  INFLUENZA: "วัคซีนไข้หวัดใหญ่",
+  HPV: "วัคซีนป้องกันเอชพีวี",
+};
+const groupSuffix = (groupCode: string, n: number): string =>
+  groupCode === "INFLUENZA"
+    ? " (มี 2 ชนิด: แบบฉีด และแบบพ่นจมูก สอบถามแพทย์ก่อนรับ)"
+    : ` (มี ${n} ชนิด สอบถามแพทย์ก่อนรับ)`;
+
+// ข้อความ override เฉพาะแถว (vaccine_id + age_group) ที่ยืนยันคำต่อคำกับ Yai แล้ว — ใช้แทนชื่อเดี่ยวๆ
+// ปกติ เมื่อเหตุผลเป็นเรื่องคลินิก (รับต่อจากเดิม / เตือนถ้ายังไม่เคยรับ) ไม่ใช่แค่ "มีกี่ชนิดให้เลือก"
+const ROW_TEXT_OVERRIDE: Record<string, string> = {
+  "ROTATEQ|6M": "วัคซีนโรต้า (ชนิด 5 สายพันธุ์ กรณีเคยรับชนิดนี้มาก่อน)",
+  "FLU im|9M": "วัคซีนไข้หวัดใหญ่ (ถ้าไม่เคยรับ)",
+  "FLU im|12M": "วัคซีนไข้หวัดใหญ่ (ถ้าไม่เคยรับ)",
+};
 
 async function fetchAgeGroupDoses(ageCodes: string[]): Promise<DoseRow[]> {
   const { data } = await admin
     .from("vaccine_doses")
-    .select("vaccine_id,name_th_override,status,vaccines!inner(name_th,priority,status)")
+    .select("age_group,vaccine_id,name_th_override,status,vaccines!inner(name_th,priority,status,group_code)")
     .in("age_group", ageCodes)
     .eq("status", "ACTIVE");
   return (data ?? []) as unknown as DoseRow[];
 }
 
-/** จำนวนครั้งทั้งหมดที่ต้องรับต่อ vaccine_id ทั้งตาราง (นับจากจำนวนแถว vaccine_doses ที่ ACTIVE
- *  ของ vaccine_id นั้น ไม่ผูกกับ ageCodes ที่ query อยู่ตอนนี้) — ใช้แสดง "(รับทั้งหมด N ครั้ง)"
- *  แบบคำนวณจาก DB สด ไม่ hardcode จำนวนเข็ม เช่น Rotarix query ออกมา 2 แถว (2, 4 เดือน) → 2 ครั้ง,
- *  RotaTeq query ออกมา 3 แถว (2, 4, 6 เดือน) → 3 ครั้ง โดยอัตโนมัติ */
-async function fetchDoseCounts(): Promise<Map<string, number>> {
-  const { data } = await admin.from("vaccine_doses").select("vaccine_id").eq("status", "ACTIVE");
-  const counts = new Map<string, number>();
-  for (const row of (data ?? []) as { vaccine_id: string }[]) {
-    counts.set(row.vaccine_id, (counts.get(row.vaccine_id) ?? 0) + 1);
-  }
-  return counts;
-}
+type AgeGroupBuckets = { routine: string[]; conditional: string[] };
 
-type AgeGroupBuckets = { routine: { name: string; doseCount: number }[]; conditional: { name: string; doseCount: number }[] };
+/** ageMonths: อายุเดียว (2/4/6/.../48) ใช้ตัดสิน routine/conditional ของ "ไข้หวัดใหญ่" เท่านั้น —
+ *  น้อยกว่า 2 ปี = ตามเกณฑ์อายุ (รัฐสนับสนุนฟรี/เทียบเท่าจำเป็นสำหรับกลุ่มเสี่ยงรุนแรง), 2 ปีขึ้นไป =
+ *  พิจารณาตามเงื่อนไข (แล้วแต่ผู้ปกครองเลือก) — null สำหรับก้อนอายุกว้าง (เช่น "4-12 ปี") ถือเป็น
+ *  เงื่อนไขเสมอ ยืนยันกับ Yai แล้ว (3 ก.ย. 2569) */
+async function buildAgeGroupBuckets(ageCodes: string[], ageMonths: number | null): Promise<AgeGroupBuckets> {
+  const rows = await fetchAgeGroupDoses(ageCodes);
 
-async function buildAgeGroupBuckets(ageCodes: string[]): Promise<AgeGroupBuckets> {
-  const [rows, doseCounts] = await Promise.all([fetchAgeGroupDoses(ageCodes), fetchDoseCounts()]);
-  const seen = new Set<string>();
-  const routine: { name: string; doseCount: number }[] = [];
-  const conditional: { name: string; doseCount: number }[] = [];
+  // dedupe by vaccine_id ก่อน — วัคซีนตัวเดียวอาจโผล่มาหลาย age_group เมื่อ ageCodes กว้าง (เช่น
+  // ก้อน "4-12 ปี" รวมหลายอายุ) ไม่ควรนับซ้ำ
+  const byVaccineId = new Map<string, DoseRow>();
   for (const row of rows) {
     if (row.vaccines.status !== "ACTIVE") continue;
-    const name = row.name_th_override ?? row.vaccines.name_th;
-    if (!name || seen.has(name)) continue;
-    seen.add(name);
-    const item = { name, doseCount: doseCounts.get(row.vaccine_id) ?? 1 };
-    (CONDITIONAL_PRIORITIES.has(row.vaccines.priority ?? "") ? conditional : routine).push(item);
+    if (!byVaccineId.has(row.vaccine_id)) byVaccineId.set(row.vaccine_id, row);
+  }
+
+  const groupCounts = new Map<string, number>();
+  for (const row of byVaccineId.values()) {
+    const gc = row.vaccines.group_code;
+    if (gc && GROUP_DISPLAY_NAME[gc]) groupCounts.set(gc, (groupCounts.get(gc) ?? 0) + 1);
+  }
+
+  type Item = { text: string; bucket: "routine" | "conditional"; groupCode: string | null };
+  const items: Item[] = [];
+  const mergedGroups = new Set<string>();
+  for (const row of byVaccineId.values()) {
+    const groupCode = row.vaccines.group_code;
+    const baseName = row.name_th_override ?? row.vaccines.name_th;
+    if (!baseName) continue;
+
+    let bucket: "routine" | "conditional" = CONDITIONAL_PRIORITIES.has(row.vaccines.priority ?? "")
+      ? "conditional"
+      : "routine";
+    if (groupCode === "INFLUENZA") bucket = ageMonths != null && ageMonths < 24 ? "routine" : "conditional";
+
+    const overrideText = ROW_TEXT_OVERRIDE[`${row.vaccine_id}|${row.age_group}`];
+    if (overrideText) {
+      items.push({ text: overrideText, bucket, groupCode });
+      continue;
+    }
+    if (groupCode && GROUP_DISPLAY_NAME[groupCode] && (groupCounts.get(groupCode) ?? 0) > 1) {
+      if (mergedGroups.has(groupCode)) continue; // ยุบรวมแล้ว ไม่ต้องเพิ่มซ้ำ
+      mergedGroups.add(groupCode);
+      items.push({ text: GROUP_DISPLAY_NAME[groupCode] + groupSuffix(groupCode, groupCounts.get(groupCode)!), bucket, groupCode });
+      continue;
+    }
+    items.push({ text: baseName, bucket, groupCode });
+  }
+
+  const seen = new Set<string>();
+  const routine: string[] = [];
+  const conditional: string[] = [];
+  for (const it of items) {
+    if (seen.has(it.text)) continue;
+    seen.add(it.text);
+    (it.bucket === "routine" ? routine : conditional).push(it.text);
   }
   return { routine, conditional };
 }
 
-const doseSuffix = (n: number) => (n > 1 ? ` (รับทั้งหมด ${n} ครั้ง)` : "");
+// *** เพิ่ม 2026-09-03 ***: 3 ปี (36M) เป็นนัดตรวจพัฒนาการ ไม่ใช่นัดวัคซีนตามเกณฑ์บังคับ — Yai
+// ยืนยันว่าตั้งใจแบบนี้ (ให้เด็กได้แวะคลินิกระหว่าง 2-4 ปี ไม่หายไปนาน + พอดีเป็นช่วงแนะนำวัคซีน
+// สุกใสเข็ม 2) แสดงหัวข้อ "สำหรับทางคลินิก/นัดรับ" แทน "💉 ตามเกณฑ์อายุ" ปกติ เฉพาะอายุนี้อายุเดียว
+const CLINIC_VISIT_HEADER = "📋 สำหรับทางคลินิก / นัดรับ";
+const VARICELLA_BOOSTER_2_TEXT =
+  "วัคซีนสุกใส กระตุ้นเข็มที่ 2 กรณีได้รับเข็มแรกมาแล้ว ให้สอบถามแพทย์ก่อนการรับ";
+
+type RenderPlan = { clinicNote?: string; routine: string[]; conditional: string[] };
+
+async function buildRenderPlan(ageCodes: string[], ageMonths: number | null): Promise<RenderPlan> {
+  const { routine, conditional } = await buildAgeGroupBuckets(ageCodes, ageMonths);
+  if (ageCodes.length === 1 && ageCodes[0] === "36M") {
+    const idx = conditional.indexOf("วัคซีนสุกใส กระตุ้น");
+    const rest = idx >= 0 ? [...conditional.slice(0, idx), ...conditional.slice(idx + 1)] : conditional;
+    return { clinicNote: VARICELLA_BOOSTER_2_TEXT, routine: [], conditional: rest };
+  }
+  return { routine, conditional };
+}
 
 /** ageCodes match age_guide.age_code / vaccine_doses.age_group, e.g. ["24M"]
  *  for a single age or ["48M","51M","132M","138M"] for a broad "4-12 ปี" summary.
- *  Plain-text version — used for Messenger (Flex Message is LINE-only) and as the
- *  LINE altText for buildAgeCardFlex() below. */
+ *  ageMonths: single numeric age for the INFLUENZA age-rule above, or null for a
+ *  wide bucket like "4-12 ปี". Plain-text version — used for Messenger (Flex
+ *  Message is LINE-only) and as the LINE altText for buildAgeCardFlex() below. */
 export async function buildAgeGroupVaccineList(
   ageCodes: string[],
   label: string,
   link: string,
+  ageMonths: number | null = null,
 ): Promise<string> {
-  const { routine, conditional } = await buildAgeGroupBuckets(ageCodes);
+  const { clinicNote, routine, conditional } = await buildRenderPlan(ageCodes, ageMonths);
 
-  if (routine.length === 0 && conditional.length === 0) {
+  if (!clinicNote && routine.length === 0 && conditional.length === 0) {
     return `👶 วัคซีนสำหรับเด็กอายุ ${label}\n\n` +
       `ยังไม่มีข้อมูลวัคซีนสำหรับช่วงอายุนี้ในระบบค่ะ กรุณาสอบถามเจ้าหน้าที่ หรือดูรายละเอียดเพิ่มเติมที่\n${link}`;
   }
 
   const sections = [`👶 วัคซีนสำหรับเด็กอายุ ${label}`];
-  if (routine.length) sections.push("💉 วัคซีนตามเกณฑ์อายุ\n" + routine.map((v) => `• ${v.name}${doseSuffix(v.doseCount)}`).join("\n"));
-  if (conditional.length) sections.push("🩺 วัคซีนที่พิจารณาตามเงื่อนไข\n" + conditional.map((v) => `• ${v.name}${doseSuffix(v.doseCount)}`).join("\n"));
+  if (clinicNote) sections.push(`${CLINIC_VISIT_HEADER}\n• ${clinicNote}`);
+  if (routine.length) sections.push("💉 วัคซีนตามเกณฑ์อายุ\n" + routine.map((t) => `• ${t}`).join("\n"));
+  if (conditional.length) sections.push("🩺 วัคซีนที่พิจารณาตามเงื่อนไข\n" + conditional.map((t) => `• ${t}`).join("\n"));
   sections.push(`📌 ${AGE_GROUP_FOOTER_NOTE}`);
   sections.push(`👉 ดูรายละเอียดและราคา\n${link}`);
   return sections.join("\n\n");
@@ -202,9 +278,10 @@ export async function buildAgeCardFlex(
   label: string,
   heroImageUrl: string,
   link: string,
+  ageMonths: number | null = null,
 ): Promise<{ flex: Record<string, unknown>; altText: string }> {
-  const { routine, conditional } = await buildAgeGroupBuckets(ageCodes);
-  const altText = await buildAgeGroupVaccineList(ageCodes, label, link);
+  const { clinicNote, routine, conditional } = await buildRenderPlan(ageCodes, ageMonths);
+  const altText = await buildAgeGroupVaccineList(ageCodes, label, link, ageMonths);
 
   const bulletRow = (text: string, dotColor: string) => ({
     type: "box",
@@ -217,7 +294,7 @@ export async function buildAgeCardFlex(
   });
 
   const body: Record<string, unknown>[] = [];
-  if (routine.length === 0 && conditional.length === 0) {
+  if (!clinicNote && routine.length === 0 && conditional.length === 0) {
     body.push({
       type: "text",
       wrap: true,
@@ -226,15 +303,19 @@ export async function buildAgeCardFlex(
       text: "ยังไม่มีข้อมูลวัคซีนสำหรับช่วงอายุนี้ในระบบค่ะ กรุณาสอบถามเจ้าหน้าที่",
     });
   } else {
+    if (clinicNote) {
+      body.push({ type: "text", text: CLINIC_VISIT_HEADER, weight: "bold", size: "sm", color: BRAND_GREEN_DARK, margin: body.length ? "lg" : "none" });
+      body.push({ type: "box", layout: "vertical", spacing: "xs", margin: "sm", contents: [bulletRow(clinicNote, BRAND_GREEN_DARK)] });
+    }
     if (routine.length) {
       body.push({ type: "text", text: "💉 วัคซีนตามเกณฑ์อายุ", weight: "bold", size: "sm", color: BRAND_GREEN_DARK, margin: body.length ? "lg" : "none" });
       body.push({ type: "box", layout: "vertical", spacing: "xs", margin: "sm",
-        contents: routine.map((v) => bulletRow(v.name + doseSuffix(v.doseCount), BRAND_GREEN_DARK)) });
+        contents: routine.map((t) => bulletRow(t, BRAND_GREEN_DARK)) });
     }
     if (conditional.length) {
       body.push({ type: "text", text: "🩺 วัคซีนที่พิจารณาตามเงื่อนไข", weight: "bold", size: "sm", color: "#C2410C", margin: body.length ? "lg" : "none" });
       body.push({ type: "box", layout: "vertical", spacing: "xs", margin: "sm",
-        contents: conditional.map((v) => bulletRow(v.name + doseSuffix(v.doseCount), "#C2410C")) });
+        contents: conditional.map((t) => bulletRow(t, "#C2410C")) });
     }
   }
   body.push({ type: "separator", margin: "lg" });
