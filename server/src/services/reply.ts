@@ -61,23 +61,28 @@ function buildSimpleFlexCard(opts: {
 // *** เพิ่ม 2026-09-03 (รอบค่ำ) ***: carousel รวมโปรโมชั่น + วัคซีนใหม่ + ประกาศปิดคลินิก (ถ้ามี)
 // เป็นการ์ดเดียวเลื่อนดูได้ ธีมเดียวกับการ์ดอื่นๆ — ไม่มีรูป hero ต่อรายการเพราะข้อมูลในตาราง
 // promotions/vaccine_news ไม่มีฟิลด์รูปภาพ ใช้ป้ายสีบอกหมวดแทน (Flex เป็นฟอร์แมต LINE เท่านั้น)
+// *** แก้ 2026-09-03 (feedback: การ์ดยาวไป) ***: ตัดให้สั้นลงมาก — วัคซีนใหม่โชว์แค่ชื่อ ไม่มี
+// คำอธิบาย, วันหยุดโชว์แค่วันที่ปิดประจำ + วันหยุดที่ใกล้ที่สุดวันเดียว (ไม่ใช่ทั้งเดือน),
+// การ์ดเปลี่ยนเป็น size "micro" (แคบ+เตี้ยลง) ทุกใบ
 const NEWS_BADGE_PROMO = "🎉 โปรโมชั่น";
 const NEWS_BADGE_VACCINE = "💉 วัคซีนใหม่";
-const NEWS_BADGE_CLOSURE = "📅 ประกาศปิดคลินิก";
+const NEWS_BADGE_CLOSURE = "📅 วันหยุด";
+const NEWS_LINE_MAX = 60; // กันบรรทัดยาวเกินทำให้การ์ดสูงเกินไปโดยไม่ตั้งใจ
+const trimLine = (s: string) => (s.length > NEWS_LINE_MAX ? s.slice(0, NEWS_LINE_MAX - 1) + "…" : s);
 
 function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: string[]): Record<string, unknown> {
   return {
     type: "bubble",
-    size: "kilo",
+    size: "micro",
     body: {
       type: "box",
       layout: "vertical",
       backgroundColor: BRAND_CREAM,
-      paddingAll: "16px",
+      paddingAll: "12px",
       contents: [
-        { type: "text", text: badge, size: "xs", weight: "bold", color: badgeColor },
-        { type: "text", text: title, weight: "bold", size: "md", wrap: true, color: TEXT_DARK, margin: "sm" },
-        ...bodyLines.map((line) => ({ type: "text", text: line, size: "sm", color: TEXT_MUTED, wrap: true, margin: "sm" })),
+        { type: "text", text: badge, size: "xxs", weight: "bold", color: badgeColor },
+        { type: "text", text: trimLine(title), weight: "bold", size: "sm", wrap: true, color: TEXT_DARK, margin: "sm" },
+        ...bodyLines.slice(0, 2).map((line) => ({ type: "text", text: trimLine(line), size: "xs", color: TEXT_MUTED, wrap: true, margin: "sm" })),
       ],
     },
   };
@@ -86,29 +91,25 @@ function newsBubble(badge: string, badgeColor: string, title: string, bodyLines:
 async function buildNewsCarousel(): Promise<FlexMessage> {
   const today = new Date().toISOString().slice(0, 10);
   const [{ data: promos }, { data: vaccineNews }, closureSummary] = await Promise.all([
-    admin.from("promotions").select("title, vaccine_group, discount, condition")
+    admin.from("promotions").select("title, discount")
       .eq("active", true).in("kind", ["bot", "both"])
       .or(`start_date.is.null,start_date.lte.${today}`)
       .or(`end_date.is.null,end_date.gte.${today}`),
-    admin.from("vaccine_news").select("vaccine_name, description")
+    admin.from("vaccine_news").select("vaccine_name")
       .eq("status", true).in("channel", ["bot", "both"])
       .or(`expire_date.is.null,expire_date.gte.${today}`),
-    closuresSummaryText(),
+    closuresNextOneText(),
   ]);
 
   const bubbles: Record<string, unknown>[] = [];
   for (const p of promos ?? []) {
-    const lines: string[] = [];
-    if (p.vaccine_group) lines.push(`กลุ่มวัคซีน: ${p.vaccine_group}`);
-    if (p.discount) lines.push(`ส่วนลด: ${p.discount}`);
-    if (p.condition) lines.push(`เงื่อนไข: ${p.condition}`);
-    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, lines));
+    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, p.discount ? [`ส่วนลด: ${p.discount}`] : []));
   }
   for (const n of vaccineNews ?? []) {
-    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, n.description ? [n.description] : []));
+    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, []));
   }
   if (closureSummary) {
-    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", [closureSummary]));
+    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", closureSummary.split("\n")));
   }
 
   const altText = bubbles.length
@@ -358,6 +359,25 @@ async function weeklyClosedText(): Promise<string> {
   const { data: hours } = await admin.from("clinic_hours").select("day").eq("status", "CLOSED");
   const closedDays = [...new Set((hours ?? []).map((h) => h.day))];
   return closedDays.map((d) => `🔴 ปิดทุก${TH_DAY[d] ?? d}เป็นประจำ`).join("\n");
+}
+
+/** สั้นกว่า closuresListText() — เอามาแค่วันหยุดพิเศษที่ใกล้ที่สุดวันเดียว (ไม่ใช่ทั้งเดือน)
+ *  ใช้ในการ์ดข่าวสารแบบย่อ (carousel) ที่ไม่อยากให้การ์ดยาวเกินไป — เมนู "วันหยุด" หลัก
+ *  (HOLIDAYS/CLOSURE_ANNOUNCEMENT) ยังใช้ closuresListText() แบบเต็มเหมือนเดิม */
+async function closuresNextOneText(): Promise<string> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: closures } = await admin
+    .from("closures").select("start_date, end_date, reason, message, closure_type")
+    .eq("active", true).gte("end_date", today).order("start_date").limit(1);
+  const weekly = await weeklyClosedText();
+  if (!closures || closures.length === 0) return weekly;
+  const c = closures[0];
+  if (!c) return weekly;
+  const range = c.start_date === c.end_date
+    ? thaiDate(c.start_date)
+    : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
+  const nearest = `🗓️ ${range}${c.message || c.reason ? ` — ${c.message ?? c.reason}` : ""}`;
+  return [weekly, nearest].filter(Boolean).join("\n");
 }
 
 /** Full holidays summary — recurring line + upcoming closures, used by HOLIDAYS/CLOSURE_ANNOUNCEMENT. */
