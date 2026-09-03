@@ -58,6 +58,75 @@ function buildSimpleFlexCard(opts: {
   return { type: "flex", altText: opts.altText, contents };
 }
 
+// *** เพิ่ม 2026-09-03 (รอบค่ำ) ***: carousel รวมโปรโมชั่น + วัคซีนใหม่ + ประกาศปิดคลินิก (ถ้ามี)
+// เป็นการ์ดเดียวเลื่อนดูได้ ธีมเดียวกับการ์ดอื่นๆ — ไม่มีรูป hero ต่อรายการเพราะข้อมูลในตาราง
+// promotions/vaccine_news ไม่มีฟิลด์รูปภาพ ใช้ป้ายสีบอกหมวดแทน (Flex เป็นฟอร์แมต LINE เท่านั้น)
+const NEWS_BADGE_PROMO = "🎉 โปรโมชั่น";
+const NEWS_BADGE_VACCINE = "💉 วัคซีนใหม่";
+const NEWS_BADGE_CLOSURE = "📅 ประกาศปิดคลินิก";
+
+function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: string[]): Record<string, unknown> {
+  return {
+    type: "bubble",
+    size: "kilo",
+    body: {
+      type: "box",
+      layout: "vertical",
+      backgroundColor: BRAND_CREAM,
+      paddingAll: "16px",
+      contents: [
+        { type: "text", text: badge, size: "xs", weight: "bold", color: badgeColor },
+        { type: "text", text: title, weight: "bold", size: "md", wrap: true, color: TEXT_DARK, margin: "sm" },
+        ...bodyLines.map((line) => ({ type: "text", text: line, size: "sm", color: TEXT_MUTED, wrap: true, margin: "sm" })),
+      ],
+    },
+  };
+}
+
+async function buildNewsCarousel(): Promise<FlexMessage> {
+  const today = new Date().toISOString().slice(0, 10);
+  const [{ data: promos }, { data: vaccineNews }, closureSummary] = await Promise.all([
+    admin.from("promotions").select("title, vaccine_group, discount, condition")
+      .eq("active", true).in("kind", ["bot", "both"])
+      .or(`start_date.is.null,start_date.lte.${today}`)
+      .or(`end_date.is.null,end_date.gte.${today}`),
+    admin.from("vaccine_news").select("vaccine_name, description")
+      .eq("status", true).in("channel", ["bot", "both"])
+      .or(`expire_date.is.null,expire_date.gte.${today}`),
+    closuresSummaryText(),
+  ]);
+
+  const bubbles: Record<string, unknown>[] = [];
+  for (const p of promos ?? []) {
+    const lines: string[] = [];
+    if (p.vaccine_group) lines.push(`กลุ่มวัคซีน: ${p.vaccine_group}`);
+    if (p.discount) lines.push(`ส่วนลด: ${p.discount}`);
+    if (p.condition) lines.push(`เงื่อนไข: ${p.condition}`);
+    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, lines));
+  }
+  for (const n of vaccineNews ?? []) {
+    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, n.description ? [n.description] : []));
+  }
+  if (closureSummary) {
+    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", [closureSummary]));
+  }
+
+  const altText = bubbles.length
+    ? `มีข่าวสาร ${bubbles.length} เรื่อง — เลื่อนดูในแชทได้เลยค่ะ`
+    : "ช่วงนี้ยังไม่มีข่าวสารใหม่ค่ะ";
+
+  if (bubbles.length === 0) {
+    // carousel ว่างส่งไม่ได้ตาม LINE spec — ใช้ bubble เดี่ยวแทนกรณีไม่มีข่าวสารเลย
+    return {
+      type: "flex",
+      altText,
+      contents: newsBubble("📰 ข่าวสาร", BRAND_GREEN_DARK, "ยังไม่มีข่าวสารใหม่ตอนนี้", ["แวะกลับมาเช็คใหม่อีกครั้งนะคะ 😊"]),
+    };
+  }
+
+  return { type: "flex", altText, contents: { type: "carousel", contents: bubbles.slice(0, 10) } };
+}
+
 
 // Thai date: "2026-08-22" -> "22 ส.ค. 2569"
 const TH_MON = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
@@ -644,6 +713,13 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       return [{ type: "text", text }];
     }
     case "NEWS": {
+      // *** เพิ่ม 2026-09-03 (รอบค่ำ) ***: เดิมกดปุ่ม "ข่าวสาร" แล้วต้องเลือกหมวดก่อน (โปรโมชั่น/
+      // วัคซีนใหม่/ประกาศปิดคลินิก) ถึงจะเห็นเนื้อหาจริง หลายคนไม่กดต่อดูหมวดอื่น — เปลี่ยนเป็น
+      // carousel รวมทุกเรื่องไว้ในการ์ดเดียว เลื่อนดูได้เลยไม่ต้องเลือกก่อน (LINE เท่านั้น,
+      // Messenger ยังเป็น quick-reply แบบเดิมเพราะ carousel เป็นฟอร์แมต LINE Flex)
+      if (channel === "line") {
+        return [await buildNewsCarousel()];
+      }
       const items = [
         { type: "action", action: { type: "message", label: "โปรโมชั่น", text: "โปรโมชั่น" } },
         { type: "action", action: { type: "message", label: "วัคซีนใหม่", text: "วัคซีนใหม่" } },
