@@ -70,8 +70,8 @@ const NEWS_BADGE_CLOSURE = "📅 วันหยุด";
 const NEWS_LINE_MAX = 60; // กันบรรทัดยาวเกินทำให้การ์ดสูงเกินไปโดยไม่ตั้งใจ
 const trimLine = (s: string) => (s.length > NEWS_LINE_MAX ? s.slice(0, NEWS_LINE_MAX - 1) + "…" : s);
 
-function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: string[]): Record<string, unknown> {
-  return {
+function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: string[], opts?: { button?: { label: string; uri: string }; heroUrl?: string }): Record<string, unknown> {
+  const bubble: Record<string, unknown> = {
     type: "bubble",
     size: "micro",
     body: {
@@ -86,30 +86,51 @@ function newsBubble(badge: string, badgeColor: string, title: string, bodyLines:
       ],
     },
   };
+  // *** เพิ่ม 2026-09-03 ***: รูป hero ตามหมวด (ไม่ใช่ต่อรายการ) — ทำครั้งเดียว 3 รูปใช้ซ้ำได้
+  // ทุกโปรโมชั่น/วัคซีนใหม่/วันหยุดที่เพิ่มเข้ามาทีหลัง ไม่ต้องสร้างรูปใหม่ทุกครั้ง
+  if (opts?.heroUrl) {
+    bubble.hero = { type: "image", url: opts.heroUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
+  }
+  if (opts?.button) {
+    bubble.footer = {
+      type: "box",
+      layout: "vertical",
+      paddingAll: "12px",
+      contents: [{ type: "button", style: "secondary", height: "sm", action: { type: "uri", label: opts.button.label, uri: opts.button.uri } }],
+    };
+  }
+  return bubble;
 }
 
 async function buildNewsCarousel(): Promise<FlexMessage> {
   const today = new Date().toISOString().slice(0, 10);
-  const [{ data: promos }, { data: vaccineNews }, closureSummary] = await Promise.all([
+  const [{ data: promos }, { data: vaccineNews }, closureSummary, phone] = await Promise.all([
     admin.from("promotions").select("title, discount")
       .eq("active", true).in("kind", ["bot", "both"])
       .or(`start_date.is.null,start_date.lte.${today}`)
       .or(`end_date.is.null,end_date.gte.${today}`),
-    admin.from("vaccine_news").select("vaccine_name")
+    admin.from("vaccine_news").select("vaccine_name, description")
       .eq("status", true).in("channel", ["bot", "both"])
       .or(`expire_date.is.null,expire_date.gte.${today}`),
     closuresNextOneText(),
+    config("PHONE"),
   ]);
 
   const bubbles: Record<string, unknown>[] = [];
   for (const p of promos ?? []) {
-    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, p.discount ? [`ส่วนลด: ${p.discount}`] : []));
+    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, p.discount ? [`ส่วนลด: ${p.discount}`] : [], { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_promo.png` }));
   }
+  // *** แก้ 2026-09-03 (feedback: การ์ดที่ 2 จืดไป) ***: เพิ่ม hook สั้นๆ (ตัด description ไม่
+  // เกิน 40 ตัวอักษร ให้รู้ว่า "ทำไมถึงเป็นข่าว" ไม่ใช่แค่ชื่อเฉยๆ) + ปุ่ม "สอบถามเพิ่มเติม"
+  // โทรหาคลินิกโดยตรง (เบอร์เดียวกับที่การ์ดติดต่อใช้)
+  const trimHook = (s: string) => (s.length > 40 ? s.slice(0, 39) + "…" : s);
   for (const n of vaccineNews ?? []) {
-    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, []));
+    const hook = n.description ? [trimHook(n.description)] : [];
+    const button = phone ? { label: "สอบถามเพิ่มเติม", uri: `tel:${phone}` } : undefined;
+    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, hook, { button, heroUrl: `${MENU_HERO_BASE}/menu_hero_news_vaccine.png` }));
   }
   if (closureSummary) {
-    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", closureSummary.split("\n")));
+    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", closureSummary.split("\n"), { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_closure.png` }));
   }
 
   const altText = bubbles.length
