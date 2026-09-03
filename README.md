@@ -1,4 +1,5 @@
 # BAANDEK Vaccine Bot — Supabase Migration
+Last update: 20260903
 
 LINE + Messenger vaccine advisory + appointment bot for บ้านเด็กคลินิก.
 Migrated from Google Apps Script + Sheets → **Supabase + Hono (Bun) + React**.
