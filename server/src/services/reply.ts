@@ -14,12 +14,14 @@ export type ReplyMessage = TextMessage | FlexMessage;
 // การ์ดวัคซีน (BRAND_GREEN/BRAND_CREAM จาก vaccine.ts) ให้บอททั้งตัวดูเป็นแบรนด์เดียวกัน —
 // LINE เท่านั้น (Flex เป็นฟอร์แมต LINE) Messenger ยังใช้ข้อความล้วนเดิมทุกจุด
 const MENU_HERO_BASE = `${env.supabaseUrl}/storage/v1/object/public/menu-hero`;
+type FlexButton = { label: string; uri?: string; text?: string }; // uri = เปิดลิงก์/โทร, text = ส่งข้อความ (quick-reply แบบเดิม)
 function buildSimpleFlexCard(opts: {
   title: string;
   heroUrl: string;
   bodyLines: string[];
-  buttonLabel?: string;
-  buttonUri?: string;
+  buttons?: FlexButton[]; // *** แก้ 2026-09-03 ***: เดิมรับปุ่มเดียว — ปุ่มที่ 2 (เช่น "เช็คนัดหมาย",
+  // "Facebook") เคยใช้ quickReply ลอยแยกจากการ์ด ทำให้ดูหลุดออกมาไม่ติดกัน (feedback จาก Yai)
+  // ย้ายมาไว้ในการ์ดเดียวกันหมด เรียงเป็นปุ่มซ้อนกันใน footer แทน
   altText: string;
 }): FlexMessage {
   const contents: Record<string, unknown> = {
@@ -36,22 +38,26 @@ function buildSimpleFlexCard(opts: {
       ],
     },
   };
-  if (opts.buttonLabel && opts.buttonUri) {
+  if (opts.buttons?.length) {
     contents.footer = {
       type: "box",
       layout: "vertical",
+      spacing: "sm",
       paddingAll: "12px",
-      contents: [{
+      contents: opts.buttons.map((btn, i) => ({
         type: "button",
-        style: "primary",
-        color: BRAND_GREEN,
+        style: i === 0 ? "primary" : "secondary",
+        color: i === 0 ? BRAND_GREEN : undefined,
         height: "sm",
-        action: { type: "uri", label: opts.buttonLabel, uri: opts.buttonUri },
-      }],
+        action: btn.uri
+          ? { type: "uri", label: btn.label, uri: btn.uri }
+          : { type: "message", label: btn.label, text: btn.text ?? btn.label },
+      })),
     };
   }
   return { type: "flex", altText: opts.altText, contents };
 }
+
 
 // Thai date: "2026-08-22" -> "22 ส.ค. 2569"
 const TH_MON = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
@@ -462,19 +468,26 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       const mentionsToday = /วันนี้/.test(r.text);
       const mentionsTomorrow = /พรุ่งนี้/.test(r.text);
 
+      let parts: string[];
       if (mentionsTomorrow && !mentionsToday) {
-        return [{ type: "text", text: (await dayStatusBlock(tomorrowDate, "พรุ่งนี้")).join("\n\n") }];
+        parts = await dayStatusBlock(tomorrowDate, "พรุ่งนี้");
+      } else if (mentionsToday && !mentionsTomorrow) {
+        parts = await dayStatusBlock(now, "วันนี้");
+      } else {
+        parts = await dayStatusBlock(now, "วันนี้");
+        parts.push(...(await dayStatusBlock(tomorrowDate, "พรุ่งนี้")));
+        const summary = await closuresListText();
+        if (summary) parts.push(summary);
       }
-      if (mentionsToday && !mentionsTomorrow) {
-        return [{ type: "text", text: (await dayStatusBlock(now, "วันนี้")).join("\n\n") }];
+
+      if (channel === "line") {
+        return [buildSimpleFlexCard({
+          title: "🕐 เวลาทำการวันนี้/พรุ่งนี้",
+          heroUrl: `${MENU_HERO_BASE}/menu_hero_clinicstatus.png`,
+          bodyLines: parts,
+          altText: parts.join("\n\n"),
+        })];
       }
-
-      const parts = await dayStatusBlock(now, "วันนี้");
-      parts.push(...(await dayStatusBlock(tomorrowDate, "พรุ่งนี้")));
-
-      const summary = await closuresListText();
-      if (summary) parts.push(summary);
-
       return [{ type: "text", text: parts.join("\n\n") }];
     }
     // Ported from CLINIC_STATUS_SPECIFIC_DATE (old Apps Script) — "วันที่ N เปิดไหม".
@@ -520,8 +533,7 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
           title: "📍 คลินิกบ้านเด็ก",
           heroUrl: `${MENU_HERO_BASE}/menu_hero_location.png`,
           bodyLines: [addr ?? ""],
-          buttonLabel: maps ? "เปิดเส้นทางใน Google Maps" : undefined,
-          buttonUri: maps ?? undefined,
+          buttons: maps ? [{ label: "เปิดเส้นทางใน Google Maps", uri: maps }] : undefined,
           altText: text,
         })];
       }
@@ -691,12 +703,14 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
         if (fbPage) bodyLines.push(`👍 Facebook: facebook.com/${fbPage}`);
         if (lineOa) bodyLines.push(`🟢 LINE: ${lineOa}`);
         bodyLines.push("ยินดีให้บริการในเวลาทำการค่ะ");
+        const buttons: FlexButton[] = [];
+        if (phone) buttons.push({ label: `โทร ${phone}`, uri: `tel:${phone}` });
+        if (fbPage) buttons.push({ label: "Facebook", uri: `https://www.facebook.com/${fbPage}` });
         return [buildSimpleFlexCard({
           title: "📞 ติดต่อพนักงาน",
           heroUrl: `${MENU_HERO_BASE}/menu_hero_contact.png`,
           bodyLines,
-          buttonLabel: phone ? `โทร ${phone}` : undefined,
-          buttonUri: phone ? `tel:${phone}` : undefined,
+          buttons,
           altText: text,
         })];
       }
@@ -706,18 +720,18 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       const liffUrl = env.liffId ? `https://liff.line.me/${env.liffId}` : "";
       const text = "ต้องการจองคิว หรือเช็คนัดหมายคะ? 🗓️\nเลือกเมนูด้านล่างได้เลยค่ะ 👇";
       if (channel === "line") {
-        const card = buildSimpleFlexCard({
+        // *** แก้ 2026-09-03 ***: เดิม "เช็คนัดหมาย" เป็น quick-reply ลอยแยกจากการ์ด Flex
+        // ดูหลุดไม่ติดกัน (feedback จาก Yai) — ย้ายมาเป็นปุ่มที่ 2 ในการ์ดเดียวกันแทน
+        const buttons: FlexButton[] = [];
+        if (liffUrl) buttons.push({ label: "📅 จองคิว", uri: liffUrl });
+        buttons.push({ label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" });
+        return [buildSimpleFlexCard({
           title: "🗓️ จองคิว / เช็คนัดหมาย",
           heroUrl: `${MENU_HERO_BASE}/menu_hero_booking.png`,
           bodyLines: ["ต้องการจองคิวใหม่ หรือเช็คนัดหมายที่จองไว้แล้ว เลือกได้เลยค่ะ"],
-          buttonLabel: liffUrl ? "📅 จองคิว" : undefined,
-          buttonUri: liffUrl || undefined,
+          buttons,
           altText: text,
-        });
-        // "เช็คนัดหมาย" เป็น quick-reply แยก เพราะ Flex footer รองรับปุ่มหลักได้ปุ่มเดียวต่อ
-        // การ์ด — quickReply เป็นฟีเจอร์แยก ผูกกับ message ประเภทไหนก็ได้ (ดูหมายเหตุเดิมที่
-        // การ์ดเลือกอายุวัคซีนใช้ pattern เดียวกันนี้)
-        return [{ ...card, quickReply: { items: [{ type: "action", action: { type: "message", label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" } }] } }];
+        })];
       }
       const items: unknown[] = [];
       if (liffUrl) items.push({ type: "action", action: { type: "uri", label: "📅 จองคิว", uri: liffUrl } });
