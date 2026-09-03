@@ -1,12 +1,14 @@
 import { admin } from "../lib/supabase";
 import { env } from "../lib/env";
 import { detectIntent } from "./intent";
-import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeCardByMonths, buildAgeGroupVaccineList } from "./vaccine";
+import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeGroupVaccineList, buildAgeCardFlex } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone } from "./appointmentCheck";
 import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockReply, buildOverviewStockReply } from "./stock";
 
 export type TextMessage = { type: "text"; text: string; quickReply?: unknown };
+export type FlexMessage = { type: "flex"; altText: string; contents: Record<string, unknown>; quickReply?: unknown };
+export type ReplyMessage = TextMessage | FlexMessage;
 
 // Thai date: "2026-08-22" -> "22 ส.ค. 2569"
 const TH_MON = ["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
@@ -148,6 +150,38 @@ const AGE_PICKER_ITEMS = [
 
 const AGE_GROUP_4_TO_12_YEARS = ["48M", "51M", "132M", "138M"];
 
+// *** เพิ่ม 2026-09-03 ***: ผูกทุกปุ่มใน AGE_PICKER_ITEMS เข้ากับ vaccine_doses.age_group
+// จริง + ไฟล์ hero image (อัปโหลดไว้ที่ Supabase Storage bucket "vaccine-hero", public) —
+// ใช้ทั้งฝั่ง Flex (LINE) และฝั่งข้อความล้วน (Messenger) ทางเดียวกันหมด ไม่มีอายุไหนตอบ
+// จาก hardcode อีกต่อไป (ก่อนหน้านี้ 2/4/6/9/12/18 เดือน ตอบจากข้อความ hardcode)
+const HERO_BASE = `${env.supabaseUrl}/storage/v1/object/public/vaccine-hero`;
+const AGE_CODE_MAP: Record<number, { codes: string[]; label: string; hero: string }> = {
+  2: { codes: ["2M"], label: "2 เดือน", hero: `${HERO_BASE}/vaccine_hero_2M.png` },
+  4: { codes: ["4M"], label: "4 เดือน", hero: `${HERO_BASE}/vaccine_hero_4M.png` },
+  6: { codes: ["6M"], label: "6 เดือน", hero: `${HERO_BASE}/vaccine_hero_6M.png` },
+  9: { codes: ["9M"], label: "9 เดือน", hero: `${HERO_BASE}/vaccine_hero_9M.png` },
+  12: { codes: ["12M"], label: "1 ปี", hero: `${HERO_BASE}/vaccine_hero_12M.png` },
+  18: { codes: ["18M"], label: "1 ปีครึ่ง", hero: `${HERO_BASE}/vaccine_hero_18M.png` },
+  24: { codes: ["24M"], label: "2 ปี", hero: `${HERO_BASE}/vaccine_hero_24M.png` },
+  36: { codes: ["36M"], label: "3 ปี", hero: `${HERO_BASE}/vaccine_hero_36M.png` },
+  48: { codes: ["48M"], label: "4 ปี", hero: `${HERO_BASE}/vaccine_hero_48M.png` },
+};
+const AGE_GROUP_4_12Y = { codes: AGE_GROUP_4_TO_12_YEARS, label: "4-12 ปี", hero: `${HERO_BASE}/vaccine_hero_4_12Y.png` };
+
+/** ช่วงอายุเดียว ตอบเป็น Flex (LINE) หรือข้อความล้วน (Messenger, Flex เป็นฟอร์แมต LINE
+ *  เท่านั้น) — ทั้งคู่ query DB สดเหมือนกัน ต่างกันแค่รูปแบบการแสดงผล */
+async function buildAgeGroupReply(
+  group: { codes: string[]; label: string; hero: string },
+  link: string,
+  channel: Channel,
+): Promise<ReplyMessage[]> {
+  if (channel === "line") {
+    const { flex } = await buildAgeCardFlex(group.codes, group.label, group.hero, link);
+    return [flex as unknown as FlexMessage];
+  }
+  return [{ type: "text", text: await buildAgeGroupVaccineList(group.codes, group.label, link) }];
+}
+
 async function buildIncompletePhoneMessage(): Promise<string> {
   const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
   return (
@@ -265,7 +299,7 @@ function resolveUpcomingDateByDayOfMonth(day: number, bangkokNow: Date): Date | 
 
 export type Channel = "line" | "messenger";
 
-export async function buildReplyMessages(text: string, channel: Channel): Promise<TextMessage[]> {
+export async function buildReplyMessages(text: string, channel: Channel): Promise<ReplyMessage[]> {
   // *** แก้ 2026-08-30 ***: ครอบทั้งฟังก์ชันด้วย try/catch — ห้ามเงียบเด็ดขาดไม่ว่า
   // เหตุผลอะไร (detector จับ intent ไม่ได้ก็ตกไป default case ซึ่งตอบเสมออยู่แล้ว แต่ถ้า
   // เกิด exception ระหว่างทาง เช่น Supabase สะดุดใน resolveVaccineGroup()/config()/
@@ -294,26 +328,51 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
         // The "4-12 ปี" picker button is a range, not a single age — matched as
         // literal text rather than going through r.ageMonths (see AGE_PICKER_ITEMS).
         if (text.includes("4-12 ปี")) {
-          return [{ type: "text", text: await buildAgeGroupVaccineList(AGE_GROUP_4_TO_12_YEARS, "4-12 ปี", link) }];
+          return await buildAgeGroupReply(AGE_GROUP_4_12Y, link, channel);
         }
         // Age already clear -> answer directly, skip the picker (decided: don't
         // re-ask what the user already told us).
-        if (r.ageMonths != null) {
-          const card = buildAgeCardByMonths(r.ageMonths, link);
-          if (card) return [{ type: "text", text: card }];
-          if (r.ageMonths === 24) return [{ type: "text", text: await buildAgeGroupVaccineList(["24M"], "2 ปี", link) }];
-          if (r.ageMonths === 36) return [{ type: "text", text: await buildAgeGroupVaccineList(["36M"], "3 ปี", link) }];
-          if (r.ageMonths === 48) return [{ type: "text", text: await buildAgeGroupVaccineList(["48M"], "4 ปี", link) }];
+        const ageGroup = r.ageMonths != null ? AGE_CODE_MAP[r.ageMonths] : undefined;
+        if (ageGroup) {
+          return await buildAgeGroupReply(ageGroup, link, channel);
         }
 
         // No age given, or an age outside every known bucket -> show the picker.
-        return [{
-          type: "text",
-          text:
-            "💉 กรุณาเลือกช่วงอายุของน้อง เพื่อดูวัคซีนที่แนะนำตามเกณฑ์อายุค่ะ 😊\n\n" +
-            `หรือดูรายการและราคาทั้งหมดได้ที่\n${link}`,
-          quickReply: { items: AGE_PICKER_ITEMS },
-        }];
+        // *** เพิ่ม 2026-09-03 ***: LINE ได้ Flex hero card สวยๆ แทนข้อความล้วน ปุ่ม
+        // quickReply เดิม (AGE_PICKER_ITEMS) ยังติดมาด้วยเหมือนเดิม — quickReply เป็น
+        // ฟีเจอร์แยกจากชนิด message ผูกกับ message ประเภทไหนก็ได้ Messenger ไม่รองรับ
+        // Flex เลยคงข้อความล้วน + quick reply แบบเดิมไว้
+        const promptText =
+          "💉 กรุณาเลือกช่วงอายุของน้อง เพื่อดูวัคซีนที่แนะนำตามเกณฑ์อายุค่ะ 😊\n\n" +
+          `หรือดูรายการและราคาทั้งหมดได้ที่\n${link}`;
+        if (channel === "line") {
+          return [{
+            type: "flex",
+            altText: promptText,
+            contents: {
+              type: "bubble",
+              hero: { type: "image", url: `${HERO_BASE}/vaccine_hero_picker.png`, size: "full", aspectRatio: "20:13", aspectMode: "cover" },
+              body: {
+                type: "box",
+                layout: "vertical",
+                backgroundColor: "#FFF6E6",
+                paddingAll: "16px",
+                contents: [
+                  { type: "text", text: "กรุณาเลือกช่วงอายุของน้อง 😊", weight: "bold", size: "md", wrap: true, color: "#3C3C3C" },
+                  { type: "text", text: "เพื่อดูวัคซีนที่แนะนำตามเกณฑ์อายุ กดปุ่มด้านล่างเลือกอายุน้องได้เลยค่ะ", wrap: true, size: "sm", color: "#8C8C8C", margin: "sm" },
+                ],
+              },
+              footer: {
+                type: "box",
+                layout: "vertical",
+                paddingAll: "12px",
+                contents: [{ type: "button", style: "link", height: "sm", action: { type: "uri", label: "ดูรายการและราคาทั้งหมด", uri: link } }],
+              },
+            },
+            quickReply: { items: AGE_PICKER_ITEMS },
+          }];
+        }
+        return [{ type: "text", text: promptText, quickReply: { items: AGE_PICKER_ITEMS } }];
       }
       const res = await buildVaccineAdvice(r.vaccineGroup, r.ageMonths ?? null);
       // Standard rules only — anything outside a matching rule -> refer to doctor.

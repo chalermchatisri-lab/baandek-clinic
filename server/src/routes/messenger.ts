@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
-import { buildReplyMessages, buildMedicalQuestionAttachmentMessage, type TextMessage } from "../services/reply";
+import { buildReplyMessages, buildMedicalQuestionAttachmentMessage, type ReplyMessage } from "../services/reply";
 
 export const messenger = new Hono();
 
@@ -35,8 +35,13 @@ function toMessengerQuickReplies(items?: QuickReplyItem[]) {
 // *** แก้ 2026-08-30 ***: เดิมไม่เช็ค response.ok เลย — ถ้า Graph API ปฏิเสธ request
 // (page token หมดอายุ, ผู้ใช้ปิดกั้นบอท, เกิน 24h messaging window ฯลฯ) โค้ดจะไม่รู้เลย
 // และไม่มี log ใดๆ ทั้งสิ้น เพิ่ม log เพื่อให้ debug เคส "เงียบ" แบบนี้ย้อนหลังได้
-async function send(recipientId: string, msg: TextMessage) {
-  const message: Record<string, unknown> = { text: msg.text };
+// *** เพิ่ม 2026-09-03 ***: buildReplyMessages() คืนค่าเป็น ReplyMessage (text | flex)
+// ตั้งแต่เพิ่มการ์ดวัคซีนแบบ Flex ให้ LINE — reply.ts การันตีว่า Messenger (channel ===
+// "messenger") จะไม่ได้ flex กลับมาเลย (Flex เป็นฟอร์แมต LINE เท่านั้น) แต่กันไว้อีกชั้น
+// เผื่อพลาด: ถ้าเจอ flex หลุดมาจริงๆ ส่ง altText แทนข้อความเปล่า ดีกว่าเงียบสนิท
+async function send(recipientId: string, msg: ReplyMessage) {
+  const text = msg.type === "flex" ? msg.altText : msg.text;
+  const message: Record<string, unknown> = { text };
   const quickReplies = toMessengerQuickReplies(
     (msg.quickReply as { items?: QuickReplyItem[] } | undefined)?.items,
   );
