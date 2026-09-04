@@ -34,9 +34,11 @@ publicApi.get("/public/content-data", async (c) => {
       admin
         .from("articles")
         .select(
-          "title,category,cover_image_url,content_type,panel_images_folder,published,body_content,display_order"
+          "title,category,cover_image_url,content_type,panel_images_folder,published,body_content,display_order,start_date,end_date"
         )
         .eq("published", true)
+        .or(`start_date.is.null,start_date.lte.${today}`)
+        .or(`end_date.is.null,end_date.gte.${today}`)
         .order("display_order", { ascending: true }),
       admin
         .from("reviews")
