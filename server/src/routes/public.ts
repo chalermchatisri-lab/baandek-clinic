@@ -437,9 +437,9 @@ publicApi.get("/public/vaccine-advisor-status", async (c) => {
   if (next) {
     const range = thaiDateRange(next.start_date, next.end_date);
     const total = daysInclusive(next.start_date, next.end_date);
-    msg += `\n\n📅 วันหยุดต่อเนื่องที่กำลังจะมาถึง\n${range}`;
-    if (next.reason) msg += `\nเนื่องจาก${next.reason}`;
-    msg += `\nรวม ${total} วัน`;
+    // ไม่แสดง closures.reason ต่อสาธารณะ — เป็นช่องอิสระที่เจ้าหน้าที่กรอก
+    // (อาจเป็นเหตุผลส่วนตัว เช่น "แพทย์ติดภารกิจส่วนตัว") ไม่เหมาะเผยแพร่บนหน้าเว็บ
+    msg += `\n\n📅 วันหยุดต่อเนื่องที่กำลังจะมาถึง\n${range}\nรวม ${total} วัน`;
   }
 
   return c.json({ ok: true, generatedAt: new Date().toISOString(), message: msg });
