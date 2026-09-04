@@ -71,7 +71,7 @@ const NEWS_LINE_MAX = 60; // กันบรรทัดยาวเกินท
 const trimLine = (s: string) => (s.length > NEWS_LINE_MAX ? s.slice(0, NEWS_LINE_MAX - 1) + "…" : s);
 
 type BodyLine = string | { text: string; color: string };
-function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: BodyLine[], opts?: { button?: { label: string; uri: string }; heroUrl?: string }): Record<string, unknown> {
+function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: BodyLine[], opts?: { buttons?: FlexButton[]; heroUrl?: string }): Record<string, unknown> {
   const bubble: Record<string, unknown> = {
     type: "bubble",
     size: "micro",
@@ -97,12 +97,20 @@ function newsBubble(badge: string, badgeColor: string, title: string, bodyLines:
   if (opts?.heroUrl) {
     bubble.hero = { type: "image", url: opts.heroUrl, size: "full", aspectRatio: "4:3", aspectMode: "cover" };
   }
-  if (opts?.button) {
+  if (opts?.buttons?.length) {
     bubble.footer = {
       type: "box",
       layout: "vertical",
+      spacing: "sm",
       paddingAll: "12px",
-      contents: [{ type: "button", style: "secondary", height: "sm", action: { type: "uri", label: opts.button.label, uri: opts.button.uri } }],
+      contents: opts.buttons.map((btn, i) => ({
+        type: "button",
+        style: i === 0 ? "secondary" : "link",
+        height: "sm",
+        action: btn.uri
+          ? { type: "uri", label: btn.label, uri: btn.uri }
+          : { type: "message", label: btn.label, text: btn.text ?? btn.label },
+      })),
     };
   }
   return bubble;
@@ -138,8 +146,10 @@ async function buildNewsCarousel(): Promise<FlexMessage> {
   for (const n of vaccineNews ?? []) {
     const hookText = n.short_hook ?? (n.description ? trimHook(n.description) : null);
     const hook: BodyLine[] = hookText ? [hookText] : [];
-    const button = phone ? { label: "สอบถามเพิ่มเติม", uri: `tel:${phone}` } : undefined;
-    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, hook, { button, heroUrl: `${MENU_HERO_BASE}/menu_hero_news_vaccine.png` }));
+    const buttons: FlexButton[] = [];
+    if (phone) buttons.push({ label: "สอบถามเพิ่มเติม", uri: `tel:${phone}` });
+    if (n.description) buttons.push({ label: "📄 ดูข้อความทั้งหมด", text: `ดูข้อความเต็ม: ${n.vaccine_name}` });
+    bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, hook, { buttons, heroUrl: `${MENU_HERO_BASE}/menu_hero_news_vaccine.png` }));
   }
   // *** แก้ 2026-09-03 (feedback: ตัดเหตุผลออก โชว์แค่วันพอ + แยกสีปิดประจำ/ปิดพิเศษ) ***
   if (closureParts.weekly || closureParts.nearestDate) {
@@ -163,6 +173,17 @@ async function buildNewsCarousel(): Promise<FlexMessage> {
   }
 
   return { type: "flex", altText, contents: { type: "carousel", contents: bubbles.slice(0, 10) } };
+}
+
+/** ข้อความเต็มของข่าววัคซีน ตอบกลับตอนกดปุ่ม "📄 ดูข้อความทั้งหมด" ในการ์ด carousel */
+async function buildVaccineNewsFullText(vaccineName: string): Promise<string> {
+  const { data } = await admin
+    .from("vaccine_news").select("vaccine_name, description")
+    .eq("vaccine_name", vaccineName).eq("status", true).maybeSingle();
+  if (!data?.description) {
+    return "ขออภัยค่ะ ไม่พบรายละเอียดข่าวนี้แล้ว อาจถูกปรับปรุงไปแล้ว สอบถามเพิ่มเติมได้ที่เจ้าหน้าที่ค่ะ";
+  }
+  return `💉 ${data.vaccine_name}\n\n${data.description}`;
 }
 
 
@@ -483,6 +504,15 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
   // ส่งอะไรกลับผู้ใช้เลย — เคสจริง 2026-08-30 บน Messenger) ไม่ได้ re-indent โค้ดเดิมด้านใน
   // ทั้งหมดเพื่อให้ diff เทียบง่าย
   try {
+  // Fast path: "📄 ดูข้อความทั้งหมด" button from the news carousel -> full description
+  // (ปุ่มส่ง message action เป็นข้อความนี้ เหมือนผู้ใช้พิมพ์เอง — pattern เดียวกับปุ่มอื่นๆ
+  // ในบอท เช่น "เช็คนัดหมาย" — ไม่ผ่าน detectIntent เพราะเป็นคำสั่งเฉพาะจากปุ่ม ไม่ใช่ประโยค
+  // ธรรมชาติที่ต้องตีความ)
+  const fullNewsMatch = text.match(/^ดูข้อความเต็ม: (.+)$/);
+  if (fullNewsMatch?.[1]) {
+    return [{ type: "text", text: await buildVaccineNewsFullText(fullNewsMatch[1]) }];
+  }
+
   // Fast path: a lone phone number = user answering the appointment prompt.
   if (looksLikePhoneAttempt(text)) {
     if (!isCompletePhone(text)) {
