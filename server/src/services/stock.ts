@@ -12,6 +12,12 @@ export interface StockItem {
   level: AlertLevel;
 }
 
+export interface EmergencyExpiryItem {
+  id: string;
+  name: string;
+  expiryDate: string; // "YYYY-MM-DD"
+}
+
 // 🔴 out of stock or at/below half the reorder point; 🟡 at/below the reorder
 // point (but above half); 🟢 otherwise. Computed on read, never stored, so it
 // can never go stale relative to qty_on_hand/min_threshold.
@@ -71,6 +77,51 @@ export function buildStockAlertMessage(items: StockItem[]): string | null {
   if (yellow.length) sections.push(formatSection("🟡 ใกล้ถึงจุดสั่งซื้อ", yellow));
   sections.push("ดูรายละเอียด/แก้ไขได้ที่ Dashboard: https://vaccine-cbc-web.vercel.app");
   return sections.join("\n\n");
+}
+
+// ============================================================================
+// Emergency-drug expiry alert (chunk 4)
+// ============================================================================
+// Separate from the 🟢🟡🔴 qty-based system above: some emergency drugs
+// (Adrenaline, Dexamethasone, ...) sit unused for long stretches, so what
+// matters is expiry_date, not qty_on_hand. Deliberately NOT gated on
+// min_threshold being set (unlike getActiveStockItems) — an emergency item's
+// expiry risk doesn't depend on whether staff has configured a reorder point.
+const EMERGENCY_EXPIRY_WINDOW_DAYS = 30;
+
+function todayPlusDays(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Active, tagged-emergency items whose expiry_date is within the window
+ *  (or already past). Computed on read every call, so it naturally keeps
+ *  alerting day after day until a new stock lot updates expiry_date. */
+export async function getExpiringEmergencyItems(): Promise<EmergencyExpiryItem[]> {
+  const { data, error } = await admin
+    .from("stock_items")
+    .select("id,name,expiry_date")
+    .eq("active", true)
+    .eq("is_emergency", true)
+    .not("expiry_date", "is", null)
+    .lte("expiry_date", todayPlusDays(EMERGENCY_EXPIRY_WINDOW_DAYS))
+    .order("expiry_date", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((r) => ({ id: r.id, name: r.name, expiryDate: r.expiry_date }));
+}
+
+function formatThaiDate(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+/** Returns null when nothing's expiring soon, so the caller can skip the
+ *  section entirely (same "no noise" contract as buildStockAlertMessage). */
+export function buildEmergencyExpiryMessage(items: EmergencyExpiryItem[]): string | null {
+  if (items.length === 0) return null;
+  const lines = items.map((i) => `• ${i.name} — หมดอายุ ${formatThaiDate(i.expiryDate)}`);
+  return `⚠️ ยา Emergency ใกล้หมดอายุ:\n${lines.join("\n")}`;
 }
 
 // ============================================================================

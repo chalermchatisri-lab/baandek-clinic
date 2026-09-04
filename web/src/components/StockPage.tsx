@@ -15,6 +15,8 @@ interface StockItem {
   min_threshold: number | null;
   active: boolean;
   note: string | null;
+  expiry_date: string | null;
+  is_emergency: boolean;
   last_synced_at: string | null;
 }
 
@@ -105,7 +107,7 @@ export function StockPage() {
   }
 
   function openNew() {
-    setEditing({ name: "", category: "", unit: "", qty_on_hand: 0, min_threshold: 0, active: true, note: null });
+    setEditing({ name: "", category: "", unit: "", qty_on_hand: 0, min_threshold: 0, active: true, note: null, is_emergency: false });
     setIsNew(true);
   }
 
@@ -200,14 +202,15 @@ export function StockPage() {
                 <th className="px-4 py-3 font-medium">หมวด</th>
                 <th className="px-4 py-3 font-medium">คงเหลือ</th>
                 <th className="px-4 py-3 font-medium">ขั้นต่ำ</th>
+                <th className="px-4 py-3 font-medium">Emergency</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">กำลังโหลด…</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-clinic-muted">กำลังโหลด…</td></tr>
               ) : visibleActive.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-10 text-center text-clinic-muted">ไม่มีรายการในหมวดนี้</td></tr>
+                <tr><td colSpan={7} className="px-4 py-10 text-center text-clinic-muted">ไม่มีรายการในหมวดนี้</td></tr>
               ) : visibleActive.map((item) => {
                 const status = statusOf(item);
                 return (
@@ -222,6 +225,15 @@ export function StockPage() {
                     <td className="px-4 py-3 align-top text-clinic-muted">{item.category}</td>
                     <td className="px-4 py-3 align-top text-clinic-ink">{item.qty_on_hand} {item.unit ?? ""}</td>
                     <td className="px-4 py-3 align-top text-clinic-muted">{item.min_threshold ?? "—"}</td>
+                    <td className="px-4 py-3 align-top">
+                      {item.is_emergency ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+                          ⚠️ {item.expiry_date ? `หมดอายุ ${item.expiry_date}` : "ยังไม่มีวันหมดอายุ"}
+                        </span>
+                      ) : (
+                        <span className="text-clinic-muted">—</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button onClick={() => setDeactivating(item)}
                         className="mr-3 text-sm font-medium text-clinic-muted hover:underline">หยุดใช้</button>
@@ -382,6 +394,7 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
       min_threshold: form.min_threshold ?? null,
       active,
       note: active ? null : (form.note?.trim() || null),
+      is_emergency: form.is_emergency ?? false,
     };
     const res = isNew
       ? await supabase.from("stock_items").insert(payload)
@@ -453,6 +466,20 @@ function StockEditModal({ row, isNew, categories, onClose, onSaved }: {
             </button>
             <span className="text-sm text-clinic-ink">แสดงในรายการ/แจ้งเตือน</span>
           </label>
+          <label className="flex items-center gap-2 sm:col-span-2">
+            <button type="button" onClick={() => setForm((f) => ({ ...f, is_emergency: !(f.is_emergency ?? false) }))}
+              className={`flex h-8 w-14 items-center rounded-full px-1 transition ${form.is_emergency ? "bg-amber-500" : "bg-clinic-border"}`}>
+              <span className={`h-6 w-6 rounded-full bg-white shadow transition ${form.is_emergency ? "translate-x-6" : ""}`} />
+            </button>
+            <span className="text-sm text-clinic-ink">
+              ยา Emergency <span className="font-normal text-clinic-muted">(เฝ้าวันหมดอายุแทนจำนวนคงเหลือ)</span>
+            </span>
+          </label>
+          {form.is_emergency && (
+            <div className="rounded-lg bg-clinic-bg px-3 py-2 text-sm text-clinic-muted sm:col-span-2">
+              วันหมดอายุ: {form.expiry_date ?? "ยังไม่มีข้อมูล"} — sync มาจากโปรแกรม Doctor อัตโนมัติ แก้ที่นี่ไม่ได้
+            </div>
+          )}
           {!(form.active ?? true) && (
             <label className="block sm:col-span-2">
               <span className="mb-1 block text-sm font-medium text-clinic-ink">หมายเหตุ (หยุดใช้)</span>

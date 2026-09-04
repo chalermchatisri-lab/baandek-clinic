@@ -321,6 +321,13 @@ create index if not exists idx_incident_status on incident_log (status);
 --   (so also excluded from both the LINE alert and customer stock replies)
 --   until a real threshold is set via the dashboard. `note` is a free-text
 --   reason staff can attach when marking an item inactive ("เลิกใช้ถาวร" etc).
+--
+--   expiry_date (chunk 4) is sync-owned like qty_on_hand — overwritten from
+--   Doctor's "วันหมดอายุ" field on every sync — for emergency drugs (e.g.
+--   Adrenaline, Dexamethasone) that sit unused for long stretches and need
+--   expiry watched instead of quantity. is_emergency is dashboard-owned like
+--   note/min_threshold: sync never touches it once a row exists, and a new
+--   row always inserts with is_emergency = false regardless of the payload.
 -- ---------------------------------------------------------------------------
 create table if not exists stock_items (
   id              uuid primary key default gen_random_uuid(),
@@ -332,6 +339,8 @@ create table if not exists stock_items (
   min_threshold   int,                                -- null = pending ("รอตั้งค่า"), not yet reviewed by staff
   active          boolean not null default true,
   note            text,                               -- staff-entered reason when active is toggled off
+  expiry_date     date,                                -- synced from Doctor's "วันหมดอายุ"; null = not tracked/unknown
+  is_emergency    boolean not null default false,      -- staff-tagged: watch expiry_date instead of qty_on_hand
   last_synced_at  timestamptz,
   updated_at      timestamptz not null default now()
 );
@@ -341,10 +350,12 @@ create trigger trg_stock_items_updated before update on stock_items
 
 -- Upserts one sync batch from Doctor's [รายการยา] table (called by
 -- StockSync/sync-stock.ps1, ~20:00 daily). Existing rows (matched by
--- mdb_item_id) only ever get qty_on_hand/last_synced_at touched — name/
--- category/unit/min_threshold/active/note stay dashboard-owned. A new
--- mdb_item_id creates a row with min_threshold = NULL (pending) regardless
--- of what the payload's own min_threshold carries — see comment above.
+-- mdb_item_id) only ever get qty_on_hand/expiry_date/last_synced_at touched —
+-- name/category/unit/min_threshold/active/note/is_emergency stay
+-- dashboard-owned. A new mdb_item_id creates a row with min_threshold = NULL
+-- (pending) and is_emergency = false regardless of what the payload carries —
+-- see comment above. payload rows carry an "expiry_date" key (ISO "YYYY-MM-DD"
+-- or "" / absent when Doctor has no expiry on file for that item).
 create or replace function public.sync_mdb_stock(payload jsonb)
 returns table(inserted_count integer, updated_count integer)
 language plpgsql
@@ -355,7 +366,7 @@ declare
   v_updated_count integer;
 begin
   with upserted as (
-    insert into stock_items (mdb_item_id, name, category, unit, qty_on_hand, min_threshold, active, last_synced_at, updated_at)
+    insert into stock_items (mdb_item_id, name, category, unit, qty_on_hand, min_threshold, active, expiry_date, is_emergency, last_synced_at, updated_at)
     select
       (r->>'mdb_item_id')::int,
       r->>'name',
@@ -364,11 +375,14 @@ begin
       coalesce((r->>'qty_on_hand')::int, 0),
       null,
       true,
+      nullif(r->>'expiry_date','')::date,
+      false,
       now(),
       now()
     from jsonb_array_elements(payload) as r
     on conflict (mdb_item_id) do update set
       qty_on_hand    = excluded.qty_on_hand,
+      expiry_date    = excluded.expiry_date,
       last_synced_at = now(),
       updated_at     = now()
     returning (xmax = 0) as was_insert

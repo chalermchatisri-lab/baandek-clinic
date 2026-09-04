@@ -2,7 +2,12 @@ import { Hono } from "hono";
 import { admin } from "../lib/supabase";
 import { env } from "../lib/env";
 import { pushMessage } from "./line";
-import { getActiveStockItems, buildStockAlertMessage } from "../services/stock";
+import {
+  getActiveStockItems,
+  buildStockAlertMessage,
+  getExpiringEmergencyItems,
+  buildEmergencyExpiryMessage,
+} from "../services/stock";
 
 // Internal, non-public routes — called by scheduled infrastructure (GitHub
 // Actions cron), never by a browser or LINE. Guarded by a shared secret
@@ -42,8 +47,12 @@ internalApi.post("/internal/stock-alert-run", async (c) => {
   if (!userId) return c.json({ ok: true, skipped: "no_target_userid" });
 
   const items = await getActiveStockItems();
-  const text = buildStockAlertMessage(items);
-  if (!text) return c.json({ ok: true, skipped: "all_green" });
+  const emergencyItems = await getExpiringEmergencyItems();
+  const sections = [buildStockAlertMessage(items), buildEmergencyExpiryMessage(emergencyItems)].filter(
+    (s): s is string => s !== null,
+  );
+  if (sections.length === 0) return c.json({ ok: true, skipped: "all_green" });
+  const text = sections.join("\n\n");
 
   const sent = await pushMessage(userId, [{ type: "text", text }]);
   return c.json({ ok: sent, sent });
