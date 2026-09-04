@@ -70,7 +70,8 @@ const NEWS_BADGE_CLOSURE = "📅 วันหยุด";
 const NEWS_LINE_MAX = 60; // กันบรรทัดยาวเกินทำให้การ์ดสูงเกินไปโดยไม่ตั้งใจ
 const trimLine = (s: string) => (s.length > NEWS_LINE_MAX ? s.slice(0, NEWS_LINE_MAX - 1) + "…" : s);
 
-function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: string[], opts?: { button?: { label: string; uri: string }; heroUrl?: string }): Record<string, unknown> {
+type BodyLine = string | { text: string; color: string };
+function newsBubble(badge: string, badgeColor: string, title: string, bodyLines: BodyLine[], opts?: { button?: { label: string; uri: string }; heroUrl?: string }): Record<string, unknown> {
   const bubble: Record<string, unknown> = {
     type: "bubble",
     size: "micro",
@@ -82,7 +83,12 @@ function newsBubble(badge: string, badgeColor: string, title: string, bodyLines:
       contents: [
         { type: "text", text: badge, size: "xxs", weight: "bold", color: badgeColor },
         { type: "text", text: trimLine(title), weight: "bold", size: "sm", wrap: true, color: TEXT_DARK, margin: "sm" },
-        ...bodyLines.slice(0, 2).map((line) => ({ type: "text", text: trimLine(line), size: "xs", color: TEXT_MUTED, wrap: true, margin: "sm" })),
+        ...bodyLines.slice(0, 2).map((line) => {
+          const isObj = typeof line !== "string";
+          const text = isObj ? line.text : line;
+          const color = isObj ? line.color : TEXT_MUTED;
+          return { type: "text", text: trimLine(text), size: "xs", color, wrap: true, margin: "sm" };
+        }),
       ],
     },
   };
@@ -104,33 +110,43 @@ function newsBubble(badge: string, badgeColor: string, title: string, bodyLines:
 
 async function buildNewsCarousel(): Promise<FlexMessage> {
   const today = new Date().toISOString().slice(0, 10);
-  const [{ data: promos }, { data: vaccineNews }, closureSummary, phone] = await Promise.all([
-    admin.from("promotions").select("title, discount")
+  const [{ data: promos }, { data: vaccineNews }, closureParts, phone] = await Promise.all([
+    admin.from("promotions").select("title, discount, condition")
       .eq("active", true).in("kind", ["bot", "both"])
       .or(`start_date.is.null,start_date.lte.${today}`)
       .or(`end_date.is.null,end_date.gte.${today}`),
-    admin.from("vaccine_news").select("vaccine_name, description")
+    admin.from("vaccine_news").select("vaccine_name, short_hook, description")
       .eq("status", true).in("channel", ["bot", "both"])
       .or(`expire_date.is.null,expire_date.gte.${today}`),
-    closuresNextOneText(),
+    closuresNextOneParts(),
     config("PHONE"),
   ]);
 
   const bubbles: Record<string, unknown>[] = [];
+  // *** แก้ 2026-09-03 (feedback: ไม่บอกเงื่อนไข อาจทำให้กังวลว่าจะมารับส่วนลดได้จริงไหม) ***:
+  // เพิ่ม "เงื่อนไข" กลับเข้ามา (ตัดออกไปตอนย่อการ์ดรอบก่อน) — สมมติว่าส่วนลดเป็นต่อเข็ม
+  // (ตรงกับตัวอย่างที่ Yai ให้มา) ถ้าในอนาคตมีโปรที่ไม่ใช่ต่อเข็ม ต้องปรับคำตรงนี้
   for (const p of promos ?? []) {
-    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, p.discount ? [`ส่วนลด: ${p.discount}`] : [], { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_promo.png` }));
+    const lines: BodyLine[] = [];
+    if (p.discount) lines.push(`ลด ${p.discount} บาทต่อเข็ม`);
+    if (p.condition) lines.push({ text: `เงื่อนไข: ${p.condition}`, color: TEXT_MUTED });
+    bubbles.push(newsBubble(NEWS_BADGE_PROMO, BRAND_GREEN_DARK, p.title, lines, { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_promo.png` }));
   }
-  // *** แก้ 2026-09-03 (feedback: การ์ดที่ 2 จืดไป) ***: เพิ่ม hook สั้นๆ (ตัด description ไม่
-  // เกิน 40 ตัวอักษร ให้รู้ว่า "ทำไมถึงเป็นข่าว" ไม่ใช่แค่ชื่อเฉยๆ) + ปุ่ม "สอบถามเพิ่มเติม"
-  // โทรหาคลินิกโดยตรง (เบอร์เดียวกับที่การ์ดติดต่อใช้)
+  // hook: ใช้ short_hook ที่เขียนไว้ดีแล้ว (สรุปสั้นอ่านลื่น) ถ้ามี — fallback ไปตัด description
+  // ดิบๆ ที่ 40 ตัวอักษรเฉพาะแถวที่ยังไม่มี short_hook (เผื่อเพิ่มข่าวใหม่แล้วลืมใส่)
   const trimHook = (s: string) => (s.length > 40 ? s.slice(0, 39) + "…" : s);
   for (const n of vaccineNews ?? []) {
-    const hook = n.description ? [trimHook(n.description)] : [];
+    const hookText = n.short_hook ?? (n.description ? trimHook(n.description) : null);
+    const hook: BodyLine[] = hookText ? [hookText] : [];
     const button = phone ? { label: "สอบถามเพิ่มเติม", uri: `tel:${phone}` } : undefined;
     bubbles.push(newsBubble(NEWS_BADGE_VACCINE, "#2563EB", n.vaccine_name, hook, { button, heroUrl: `${MENU_HERO_BASE}/menu_hero_news_vaccine.png` }));
   }
-  if (closureSummary) {
-    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", closureSummary.split("\n"), { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_closure.png` }));
+  // *** แก้ 2026-09-03 (feedback: ตัดเหตุผลออก โชว์แค่วันพอ + แยกสีปิดประจำ/ปิดพิเศษ) ***
+  if (closureParts.weekly || closureParts.nearestDate) {
+    const lines: BodyLine[] = [];
+    if (closureParts.weekly) lines.push({ text: closureParts.weekly, color: "#C2410C" });
+    if (closureParts.nearestDate) lines.push({ text: closureParts.nearestDate, color: BRAND_GREEN_DARK });
+    bubbles.push(newsBubble(NEWS_BADGE_CLOSURE, "#C2410C", "วันหยุดที่จะถึงนี้", lines, { heroUrl: `${MENU_HERO_BASE}/menu_hero_news_closure.png` }));
   }
 
   const altText = bubbles.length
@@ -383,22 +399,21 @@ async function weeklyClosedText(): Promise<string> {
 }
 
 /** สั้นกว่า closuresListText() — เอามาแค่วันหยุดพิเศษที่ใกล้ที่สุดวันเดียว (ไม่ใช่ทั้งเดือน)
- *  ใช้ในการ์ดข่าวสารแบบย่อ (carousel) ที่ไม่อยากให้การ์ดยาวเกินไป — เมนู "วันหยุด" หลัก
- *  (HOLIDAYS/CLOSURE_ANNOUNCEMENT) ยังใช้ closuresListText() แบบเต็มเหมือนเดิม */
-async function closuresNextOneText(): Promise<string> {
+ *  และไม่รวมเหตุผล/ข้อความ (feedback: ผู้ปกครองอยากรู้แค่ "วันไหนปิด" พอ ไม่ต้องรู้สาเหตุ)
+ *  คืนค่าแยกเป็น 2 ส่วนเพื่อให้การ์ดข่าวสารใช้คนละสีได้ (ปิดประจำ vs ปิดพิเศษ) — เมนู "วันหยุด"
+ *  หลัก (HOLIDAYS/CLOSURE_ANNOUNCEMENT) ยังใช้ closuresListText() แบบเต็ม+เหตุผลเหมือนเดิม */
+async function closuresNextOneParts(): Promise<{ weekly: string; nearestDate: string | null }> {
   const today = new Date().toISOString().slice(0, 10);
   const { data: closures } = await admin
-    .from("closures").select("start_date, end_date, reason, message, closure_type")
+    .from("closures").select("start_date, end_date")
     .eq("active", true).gte("end_date", today).order("start_date").limit(1);
   const weekly = await weeklyClosedText();
-  if (!closures || closures.length === 0) return weekly;
-  const c = closures[0];
-  if (!c) return weekly;
+  const c = closures?.[0];
+  if (!c) return { weekly, nearestDate: null };
   const range = c.start_date === c.end_date
     ? thaiDate(c.start_date)
     : `${thaiDate(c.start_date)} – ${thaiDate(c.end_date)}`;
-  const nearest = `🗓️ ${range}${c.message || c.reason ? ` — ${c.message ?? c.reason}` : ""}`;
-  return [weekly, nearest].filter(Boolean).join("\n");
+  return { weekly, nearestDate: `🗓️ ${range}` };
 }
 
 /** Full holidays summary — recurring line + upcoming closures, used by HOLIDAYS/CLOSURE_ANNOUNCEMENT. */
