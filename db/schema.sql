@@ -205,9 +205,28 @@ create table if not exists articles (
   published           boolean default false,
   body_content        text,
   display_order       int default 999,
-  created_at          timestamptz not null default now()
+  created_at          timestamptz not null default now(),
+  start_date          timestamptz default now(),      -- visibility window start (content rotation)
+  end_date            timestamptz,                     -- null = evergreen, never expires
+  priority            int default 0                    -- manual boost, breaks ties over start_date/created_at
 );
 create index if not exists idx_articles_pub on articles (published);
+
+-- Auto-duration for content inserted after this migration (never retroactive):
+-- infographic gets a 30-day window from start_date, everything else is
+-- evergreen (NULL end_date) unless the inserter set end_date explicitly.
+create or replace function set_article_end_date() returns trigger as $$
+begin
+  if new.end_date is null and new.content_type = 'infographic' then
+    new.end_date := coalesce(new.start_date, now()) + interval '30 days';
+  end if;
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+
+create trigger trg_articles_end_date
+  before insert on articles
+  for each row execute function set_article_end_date();
 
 create table if not exists faq (
   id         uuid primary key default gen_random_uuid(),

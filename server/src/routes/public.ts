@@ -18,6 +18,7 @@ publicApi.use("*", cors({ origin: "*", allowMethods: ["GET"] }));
 // Landing page Worker can be repointed here with zero client-side changes.
 publicApi.get("/public/content-data", async (c) => {
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const nowIso = new Date().toISOString(); // articles.start_date/end_date are timestamptz
 
   const [team, services, articles, reviews, promotions, vaccineNews, links] =
     await Promise.all([
@@ -34,12 +35,14 @@ publicApi.get("/public/content-data", async (c) => {
       admin
         .from("articles")
         .select(
-          "title,category,cover_image_url,content_type,panel_images_folder,published,body_content,display_order,start_date,end_date"
+          "title,category,cover_image_url,content_type,panel_images_folder,published,body_content,display_order,priority,start_date,end_date"
         )
         .eq("published", true)
-        .or(`start_date.is.null,start_date.lte.${today}`)
-        .or(`end_date.is.null,end_date.gte.${today}`)
-        .order("display_order", { ascending: true }),
+        .lte("start_date", nowIso)
+        .or(`end_date.is.null,end_date.gte.${nowIso}`)
+        .order("priority", { ascending: false })
+        .order("start_date", { ascending: false })
+        .order("created_at", { ascending: false }),
       admin
         .from("reviews")
         .select(
