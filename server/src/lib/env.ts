@@ -10,6 +10,7 @@ export const env = {
   lineSecret: process.env.LINE_CHANNEL_SECRET ?? "",
   liffId: process.env.LIFF_ID ?? "",
   fbPageToken: process.env.FB_PAGE_ACCESS_TOKEN ?? "",
+  fbPageId: process.env.FB_PAGE_ID ?? "",
   fbVerifyToken: process.env.FB_VERIFY_TOKEN ?? "",
   geminiKey: process.env.GEMINI_API_KEY ?? "",
   geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.0-flash",

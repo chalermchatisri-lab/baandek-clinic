@@ -1,0 +1,31 @@
+# .github/workflows/facebook-auto-post.yml
+#
+# Runs every 15 minutes and asks the Render backend to check the
+# social_posts queue and publish anything pending to Facebook.
+#
+# Reuses the same shared secret as stock-alert-cron.yml — INTERNAL_CRON_SECRET
+# is already set on Render and as a GitHub repo secret, guarding every route
+# under /internal/*.
+
+name: Facebook Auto-Post
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: POST /internal/facebook-post-run
+        run: |
+          STATUS=$(curl -s -o response.json -w "%{http_code}" -X POST \
+            -H "x-internal-token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            https://baandek-clinic.onrender.com/internal/facebook-post-run)
+          echo "HTTP $STATUS"
+          cat response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::facebook-post-run failed with status $STATUS"
+            exit 1
+          fi

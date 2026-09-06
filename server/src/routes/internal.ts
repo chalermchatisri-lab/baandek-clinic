@@ -8,6 +8,7 @@ import {
   getExpiringEmergencyItems,
   buildEmergencyExpiryMessage,
 } from "../services/stock";
+import { publishPendingPosts } from "../services/facebook";
 
 // Internal, non-public routes — called by scheduled infrastructure (GitHub
 // Actions cron), never by a browser or LINE. Guarded by a shared secret
@@ -56,4 +57,24 @@ internalApi.post("/internal/stock-alert-run", async (c) => {
 
   const sent = await pushMessage(userId, [{ type: "text", text }]);
   return c.json({ ok: sent, sent });
+});
+
+// ---- POST /internal/facebook-post-run ----
+// Called every 15 minutes by .github/workflows/facebook-auto-post.yml.
+// Picks up pending rows in `social_posts` (queued by Dino after Yai approves
+// them in chat) and publishes each to the BAANDEK Facebook Page.
+internalApi.post("/internal/facebook-post-run", async (c) => {
+  try {
+    const summary = await publishPendingPosts();
+
+    if (summary.failed > 0) {
+      console.warn(`facebook-post-run: ${summary.failed} post(s) failed`, summary.results.filter((r) => !r.ok));
+    }
+
+    return c.json(summary, 200);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("facebook-post-run failed:", message);
+    return c.json({ error: message }, 500);
+  }
 });
