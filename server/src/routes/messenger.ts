@@ -94,7 +94,7 @@ messenger.post("/webhook/messenger", async (c) => {
           // reply built in reply.ts sets title=label, payload=the real intended text
           // (toMessengerQuickReplies in this file), so read payload first when present.
           const inputText = m.message.quick_reply?.payload ?? m.message.text;
-          const msgs = await buildReplyMessages(String(inputText), "messenger");
+          const msgs = await buildReplyMessages(String(inputText), "messenger", m.sender?.id);
           for (const msg of msgs) await send(m.sender.id, msg);
         } catch (err) {
           // *** แก้ 2026-08-30 ***: ชั้นสุดท้ายจริงๆ — buildReplyMessages() มี try/catch

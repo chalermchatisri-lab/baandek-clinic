@@ -76,7 +76,7 @@ line.post("/webhook/line", async (c) => {
           if (e.message?.type !== "text") {
             return await reply(e.replyToken, [{ type: "text", text: await buildMedicalQuestionAttachmentMessage() }]);
           }
-          return await reply(e.replyToken, await buildReplyMessages(String(e.message.text), "line"));
+          return await reply(e.replyToken, await buildReplyMessages(String(e.message.text), "line", e.source?.userId));
         } catch (err) {
           // *** แก้ 2026-08-30 ***: ชั้นสุดท้ายจริงๆ — buildReplyMessages() มี try/catch
           // ของตัวเองแล้ว (ไม่ควร throw มาถึงตรงนี้ได้) แต่ครอบอีกชั้นด้วยข้อความ hardcode

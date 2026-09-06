@@ -5,6 +5,7 @@ import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeGroupVaccineList, buildAge
 import { getClinicStatus } from "./clinicStatus";
 import { buildAppointmentResultByPhone } from "./appointmentCheck";
 import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockReply, buildOverviewStockReply } from "./stock";
+import { markSymptomContext, hasSymptomContext, clearSymptomContext } from "../lib/symptomContext";
 
 export type TextMessage = { type: "text"; text: string; quickReply?: unknown };
 export type FlexMessage = { type: "flex"; altText: string; contents: Record<string, unknown>; quickReply?: unknown };
@@ -496,7 +497,7 @@ function resolveUpcomingDateByDayOfMonth(day: number, bangkokNow: Date): Date | 
 
 export type Channel = "line" | "messenger";
 
-export async function buildReplyMessages(text: string, channel: Channel): Promise<ReplyMessage[]> {
+export async function buildReplyMessages(text: string, channel: Channel, userId?: string): Promise<ReplyMessage[]> {
   // *** แก้ 2026-08-30 ***: ครอบทั้งฟังก์ชันด้วย try/catch — ห้ามเงียบเด็ดขาดไม่ว่า
   // เหตุผลอะไร (detector จับ intent ไม่ได้ก็ตกไป default case ซึ่งตอบเสมออยู่แล้ว แต่ถ้า
   // เกิด exception ระหว่างทาง เช่น Supabase สะดุดใน resolveVaccineGroup()/config()/
@@ -523,6 +524,16 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
   }
 
   const r = await detectIntent(text);
+
+  // *** เพิ่ม 2026-09-06 (round 2, issue 1) ***: อัปเดต symptom-context ก่อนเข้า switch เสมอ
+  // — MEDICAL_QUESTION รีเซ็ต TTL ต่อ, intent อื่นที่ชัดเจน (ไม่ใช่ UNKNOWN) ถือว่าเปลี่ยน
+  // เรื่องคุยแล้วให้เคลียร์ทิ้ง ส่วน UNKNOWN ปล่อยผ่าน (ดูใน default case ท้ายไฟล์) เพื่อให้
+  // ยังตรวจ hasSymptomContext() ได้อยู่ตอนตัดสินใจว่าจะตอบอะไร
+  if (userId) {
+    if (r.intent === "MEDICAL_QUESTION") markSymptomContext(channel, userId);
+    else if (r.intent !== "UNKNOWN") clearSymptomContext(channel, userId);
+  }
+
   switch (r.intent) {
     case "VACCINE_INFO":
     case "VACCINE_PRICE":
@@ -602,6 +613,26 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
     }
     case "MEDICAL_QUESTION":
       return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
+    // *** เพิ่ม 2026-09-06 (round 2, issue 2) ***: คลินิกไม่มีแพ็กเกจวัคซีนรวม — ตอบตรงๆ
+    // ว่าไม่มี แล้วชี้ไปดูราคา/โปรโมชันแยกรายตัวที่ vaccine advisor แทนการปล่อยให้ตกไป
+    // การ์ดเลือกอายุ (ไม่ตรงคำถามที่ถามถึง "แพ็กเกจ" ไม่ใช่ "อายุน้อง")
+    case "VACCINE_PACKAGE": {
+      const link = (await config("VACCINE_ADVISOR")) ??
+        "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor";
+      return [{
+        type: "text",
+        text:
+          "ขอบคุณที่สอบถามนะคะ 🙏 ทางคลินิกไม่มีแพ็กเกจวัคซีนรวมค่ะ " +
+          "แต่สามารถดูราคาและโปรโมชันของวัคซีนแต่ละชนิดแยกได้ที่ลิงก์นี้เลยค่ะ\n\n" + link,
+      }];
+    }
+    // *** เพิ่ม 2026-09-06 (round 2, issue 4) ***: คำถามทั่วไป/ขอคำแนะนำแบบไม่ระบุอายุ/
+    // วัคซีนเจาะจง — ตอบง่ายๆ ไม่ต้องโชว์การ์ดเลือกอายุ (ที่ไม่ตรงคำถามกว้างๆ แบบนี้)
+    case "VACCINE_GENERAL_INFO":
+      return [{
+        type: "text",
+        text: "เข้ามาที่คลินิกได้เลยค่ะ พร้อมนำสมุดบันทึกวัคซีนของน้องมาด้วยนะคะ 😊",
+      }];
     case "PRODUCT_STOCK_INQUIRY":
       return [{ type: "text", text: await buildProductStockMessage(r.text) }];
     // *** เพิ่ม 2026-09-01 (bug 4, ยืนยันแล้ว 1 ก.ย.) ***: ข้อความปิดท้ายสนทนา (ขอบคุณ/
@@ -879,28 +910,54 @@ export async function buildReplyMessages(text: string, channel: Channel): Promis
       return [{ type: "text", text }];
     }
     case "BOOKING_MENU": {
+      // *** แก้ 2026-09-06 (round 2, issue 3) ***: เดิม channel นี้ (Messenger) ตกไปใช้ข้อความ
+      // + quick-reply ชุดเดียวกับ LINE ทั้งที่ระบบจองคิว (LIFF booking) ผูกกับ LINE โดยเฉพาะ —
+      // "จองคิว"/"จองคิวค่ะ" พิมพ์ซ้ำบน FB Messenger จะได้ข้อความเดิมวนไปเรื่อยๆ ไม่มีทางออก
+      // จริง (ไม่มีปุ่ม Rich Menu แบบ LINE ให้กด) เปลี่ยนเป็นแนะนำ LINE OA ตรงๆ แทนบน Messenger
+      // "เช็คนัดหมาย" ยังใช้งานได้ปกติทั้งสองช่องทาง (เป็นคนละ intent, ดู APPOINTMENT_CHECK)
+      // จึงบอกไว้ในข้อความนี้ด้วยว่ายังเช็คนัดหมายที่นี่ได้เลย ไม่ต้องย้ายไป LINE ทั้งหมด
+      if (channel === "messenger") {
+        const lineOa = (await config("LINE_OA")) ?? "@739fjvrr";
+        return [{
+          type: "text",
+          text:
+            "การจองคิวใหม่ทำได้ผ่าน LINE Official Account เท่านั้นค่ะ 🙏\n\n" +
+            `เพิ่มเพื่อนได้ที่ LINE ID: ${lineOa} แล้วกดเมนู "จองคิว" ได้เลยค่ะ\n\n` +
+            `หากต้องการเช็คนัดหมายที่จองไว้แล้ว พิมพ์ "เช็คนัดหมาย" ที่นี่ได้เลยค่ะ 🔍`,
+        }];
+      }
+      // channel === "line" only past this point — messenger already returned above.
       const liffUrl = env.liffId ? `https://liff.line.me/${env.liffId}` : "";
       const text = "ต้องการจองคิว หรือเช็คนัดหมายคะ? 🗓️\nเลือกเมนูด้านล่างได้เลยค่ะ 👇";
-      if (channel === "line") {
-        // *** แก้ 2026-09-03 ***: เดิม "เช็คนัดหมาย" เป็น quick-reply ลอยแยกจากการ์ด Flex
-        // ดูหลุดไม่ติดกัน (feedback จาก Yai) — ย้ายมาเป็นปุ่มที่ 2 ในการ์ดเดียวกันแทน
-        const buttons: FlexButton[] = [];
-        if (liffUrl) buttons.push({ label: "📅 จองคิว", uri: liffUrl });
-        buttons.push({ label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" });
-        return [buildSimpleFlexCard({
-          title: "🗓️ จองคิว / เช็คนัดหมาย",
-          heroUrl: `${MENU_HERO_BASE}/menu_hero_booking.png`,
-          bodyLines: ["ต้องการจองคิวใหม่ หรือเช็คนัดหมายที่จองไว้แล้ว เลือกได้เลยค่ะ"],
-          buttons,
-          altText: text,
-        })];
-      }
-      const items: unknown[] = [];
-      if (liffUrl) items.push({ type: "action", action: { type: "uri", label: "📅 จองคิว", uri: liffUrl } });
-      items.push({ type: "action", action: { type: "message", label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" } });
-      return [{ type: "text", text, quickReply: { items } }];
+      // *** แก้ 2026-09-03 ***: เดิม "เช็คนัดหมาย" เป็น quick-reply ลอยแยกจากการ์ด Flex
+      // ดูหลุดไม่ติดกัน (feedback จาก Yai) — ย้ายมาเป็นปุ่มที่ 2 ในการ์ดเดียวกันแทน
+      const buttons: FlexButton[] = [];
+      if (liffUrl) buttons.push({ label: "📅 จองคิว", uri: liffUrl });
+      buttons.push({ label: "🔍 เช็คนัดหมาย", text: "เช็คนัดหมาย" });
+      return [buildSimpleFlexCard({
+        title: "🗓️ จองคิว / เช็คนัดหมาย",
+        heroUrl: `${MENU_HERO_BASE}/menu_hero_booking.png`,
+        bodyLines: ["ต้องการจองคิวใหม่ หรือเช็คนัดหมายที่จองไว้แล้ว เลือกได้เลยค่ะ"],
+        buttons,
+        altText: text,
+      })];
     }
     default: {
+      // *** เพิ่ม 2026-09-06 (round 2, issue 1) ***: ถ้าเพิ่งอยู่ในบริบทอาการ/การรักษามา
+      // (ดู symptomContext.ts) และข้อความนี้ไม่ match intent อื่นชัดเจนเลย (ตกมาถึง default)
+      // ห้ามตอบเมนูทั่วไป/FALLBACK_MESSAGE เพราะจะดูหลุดบริบทไปเลย — แนะนำ LINE OA แทน ซึ่ง
+      // เหมาะกับคำถามต่อเนื่องเรื่องอาการมากกว่า (แชทได้ละเอียดกว่า ไม่ใช่ webhook แบบ FB/LINE
+      // นี้ที่ไม่มี state ยาวๆ)
+      if (userId && hasSymptomContext(channel, userId)) {
+        const lineOa = (await config("LINE_OA")) ?? "@739fjvrr";
+        return [{
+          type: "text",
+          text:
+            "สำหรับคำถามเพิ่มเติมเกี่ยวกับอาการหรือการรักษาของน้อง แนะนำให้สอบถามผ่าน LINE Official Account " +
+            `"คลินิกบ้านเด็ก" ได้เลยค่ะ 🙏 จะได้พูดคุยรายละเอียดกันต่อได้สะดวกขึ้นนะคะ\n\n` +
+            `เพิ่มเพื่อนได้ที่ LINE ID: ${lineOa}`,
+        }];
+      }
       // *** แก้ 2026-08-30 ***: เปลี่ยน hardcoded ultimate fallback จาก "สวัสดีค่ะ..."
       // เดิม (ไม่มีเบอร์/ไม่ชี้ทางกรณีเร่งด่วน) เป็น buildSafetyNetMessage() — ยัง
       // เคารพค่า FALLBACK_MESSAGE ที่ admin ตั้งไว้ใน dashboard เหมือนเดิมถ้ามี

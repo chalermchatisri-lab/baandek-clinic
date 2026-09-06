@@ -14,6 +14,8 @@ export type Intent =
   | "VACCINE_PRICE"
   | "VACCINE_AVAILABILITY"
   | "VACCINE_INFO"
+  | "VACCINE_PACKAGE"
+  | "VACCINE_GENERAL_INFO"
   | "MEDICAL_QUESTION"
   | "PRODUCT_STOCK_INQUIRY"
   | "SERVICES"
@@ -75,6 +77,10 @@ const KW = {
   closureAnnounce: ["ประกาศปิดคลินิก"],
   contact: ["ติดต่อ", "เบอร์โทร", "เบอร์", "โทรศัพท์", "ไลน์ไอดี"],
   booking: ["จองคิว", "จอง", "นัดคิว"],
+  // *** เพิ่ม 2026-09-06 (round 2, issue 2) ***: คลินิกไม่มีแพ็กเกจวัคซีนรวม — เช็คก่อน
+  // generic price/วัคซีน gate ด้านล่างเสมอ ไม่งั้น "แพ็กเกจวัคซีนราคาเท่าไหร่" จะโดน
+  // KW.price + "วัคซีน" ดักไปตอบการ์ดเลือกอายุ (ไม่มี group ให้ resolve) ซึ่งไม่ตรงคำถาม
+  vaccinePackage: ["แพ็กเกจ", "แพคเกจ", "เหมาจ่าย"],
   // Concrete symptom/sickness phrasing — checked BEFORE vaccine-alias resolution
   // so a disease name (e.g. "มือเท้าปาก", also a vaccine_aliases entry) said in a
   // symptom sentence ("ลูกเป็นมือเท้าปาก ไม่สบายค่ะ") routes here instead of always
@@ -103,6 +109,10 @@ const KW = {
     "ท้องเสีย", "ถ่ายเหลว", "อาเจียนบ่อย", "อาเจียน",
     "ผื่น", "ผื่นขึ้น", "มีผื่น", "ผื่นแดง",
     "แพ้", "จาม",
+    // *** เพิ่ม 2026-09-06 (round 2, issue 5) ***: "ขี้ตา" หลุด fallback เพราะไม่มี keyword
+    // ไหนจับ ตรวจแล้วไม่ชนกับคำไทยทั่วไปคำอื่น (ไม่ใช่ substring ของคำอื่นที่ใช้บ่อย) — "ตุ่ม"
+    // เพิ่มเป็น bare token เสริมจาก "ตุ่มใส"/"มีตุ่ม" เดิม เผื่อประโยคที่ไม่มีคำนำหน้า/ตามท้าย
+    "ขี้ตา", "ตุ่ม",
     "ไอมาก", "ไอบ่อย", "ไอแห้ง", "ไอมีเสมหะ", "เด็กไอ",
     "น้ำมูก", "มีน้ำมูก", "น้ำมูกไหล",
     "ปวดท้อง", "ปวดหัว", "ปวดศีรษะ",
@@ -163,6 +173,14 @@ const STATUS_QUESTION_PATTERN =
 // เคสจริง 2026-08-30 ที่ทำให้บอทเงียบสนิทบน Messenger) การบอกอุณหภูมิเป็นองศาในบริบท
 // คลินิกเด็กถือเป็นสัญญาณอาการป่วยได้เลยในตัวเอง ไม่ต้องรอคำว่า "ไข้" อยู่ข้างๆ ด้วยซ้ำ
 const TEMPERATURE_READING = /\d+(\.\d+)?\s*(องศา|°c?)/i;
+
+// *** เพิ่ม 2026-09-06 (round 2, issue 4) ***: คำถามทั่วไปแบบ "สนใจไปฉีดวัคซีนต้องทำไงคะ"
+// (ไม่ระบุอายุ/ชื่อวัคซีน) เดิมมีคำว่า "วัคซีน" อยู่ในประโยค ทำให้ตกไปที่ generic
+// vaccine gate ท้าย detectIntent() แล้วได้การ์ดเลือกอายุ ทั้งที่ลูกค้าถามกว้างๆ ว่า "ต้องทำ
+// ยังไง" ไม่ได้ถามหาวัคซีนเฉพาะเจาะจง — เช็ค pattern นี้ก่อนเข้า vaccine gate เสมอ (ดู
+// detectIntent) และต้องไม่มีทั้ง group ที่ resolve ได้และ ageMonths ด้วย ไม่งั้นคำถามเจาะจง
+// อายุอย่าง "ลูกอายุ 6 เดือน ต้องฉีดอะไรบ้าง" จะโดนแย่งไปตอบผิดทาง (ต้องคงพฤติกรรมเดิม)
+const VACCINE_HOWTO_PATTERN = /ทำ(ยังไง|ไง|อย่างไร)/;
 
 export function parseAgeMonths(text: string): number | null {
   const t = norm(text);
@@ -286,8 +304,17 @@ export async function detectIntent(message: string): Promise<IntentResult> {
     return { intent: "MEDICAL_QUESTION", text };
   if (has(text, KW.productStock)) return { intent: "PRODUCT_STOCK_INQUIRY", text };
 
+  // เช็คก่อน resolveVaccineGroup()/vaccine gate เสมอ — ดูคอมเมนต์ที่ KW.vaccinePackage ด้านบน
+  if (has(text, KW.vaccinePackage)) return { intent: "VACCINE_PACKAGE", text };
+
   const group = await resolveVaccineGroup(text);
   const ageMonths = parseAgeMonths(text);
+
+  // เช็คก่อน vaccine gate ด้านล่างเสมอ — ดูคอมเมนต์ที่ VACCINE_HOWTO_PATTERN ด้านบน ต้องไม่มี
+  // ทั้ง group และ ageMonths ไม่งั้นคำถามเจาะจงอายุ/วัคซีนจะโดนแย่งคำตอบไปตอบผิดทาง
+  if (!group && ageMonths == null && (text.includes("วัคซีน") || text.includes("ฉีด")) && VACCINE_HOWTO_PATTERN.test(text)) {
+    return { intent: "VACCINE_GENERAL_INFO", text };
+  }
 
   if (group || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน")) {
     if (has(text, KW.price)) return { intent: "VACCINE_PRICE", text, vaccineGroup: group, ageMonths };
