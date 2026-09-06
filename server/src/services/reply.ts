@@ -282,6 +282,21 @@ async function buildMedicalQuestionTextMessage(): Promise<string> {
   );
 }
 
+// *** แก้ 2026-09-06 (round 3 hotfix, issue 1) ***: เดิม fallback ตอนอยู่ใน symptom context
+// (ดู symptomContext.ts) ชี้ไปที่ LINE OA เสมอไม่เช็ค channel เลย — บั๊กจริงจาก live-test บน
+// LINE OA เอง: ผู้ใช้อยู่บน LINE OA อยู่แล้ว บอทกลับแนะนำให้ไปเพิ่มเพื่อน LINE OA (ชื่อ/ไอดี
+// เดียวกับที่คุยอยู่) วนซ้ำไร้ความหมาย — "redirect ไปช่องทางอื่น" ควรใช้เฉพาะ Issue 3
+// (จองคิวบน FB Messenger ซึ่งระบบผูกกับ LINE จริงๆ ไม่มีทางเลือกอื่น) เท่านั้น ไม่ใช่ที่นี่
+// ฟังก์ชันนี้จึงตอบตรงในแชทเดิมเสมอไม่ว่าช่องทางไหน (ไม่มี channel param เลยด้วยซ้ำ) — ย้ำ
+// คำแนะนำพบแพทย์ที่คลินิก + เบอร์โทรเจ้าหน้าที่ (ดึงจาก config เหมือนจุดอื่นทั้งไฟล์)
+async function buildSymptomFollowUpMessage(): Promise<string> {
+  const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+  return (
+    "รับทราบค่ะ 🙏 สำหรับอาการหรือการรักษาของน้อง น้องไดโนแนะนำให้พาน้องมาพบแพทย์ที่คลินิกเพื่อตรวจอย่างละเอียดนะคะ\n\n" +
+    `หากต้องการสอบถามรายละเอียดเพิ่มเติม โทรสอบถามเจ้าหน้าที่ได้เลยค่ะ ☎️ ${phone}`
+  );
+}
+
 // *** เพิ่ม 2026-08-31 ***: เดิมเป็น stub ข้อความ static บอกให้โทรถามเอง ไม่เคยเช็คสต็อกจริง
 // เลย ตอนนี้ผูกกับ stock_items จริง (sync จาก KallayaClinic.mdb ทุกวัน 20:00) — ถ้าลูกค้า
 // เอ่ยชื่อสินค้าเจาะจง (เช่น "มีนม Enfalac ไหม") ตอบเฉพาะรายการนั้น ถ้าถามกว้างๆ (เช่น
@@ -943,20 +958,16 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
       })];
     }
     default: {
-      // *** เพิ่ม 2026-09-06 (round 2, issue 1) ***: ถ้าเพิ่งอยู่ในบริบทอาการ/การรักษามา
+      // *** แก้ 2026-09-06 (round 3 hotfix, issue 1) ***: ถ้าเพิ่งอยู่ในบริบทอาการ/การรักษามา
       // (ดู symptomContext.ts) และข้อความนี้ไม่ match intent อื่นชัดเจนเลย (ตกมาถึง default)
-      // ห้ามตอบเมนูทั่วไป/FALLBACK_MESSAGE เพราะจะดูหลุดบริบทไปเลย — แนะนำ LINE OA แทน ซึ่ง
-      // เหมาะกับคำถามต่อเนื่องเรื่องอาการมากกว่า (แชทได้ละเอียดกว่า ไม่ใช่ webhook แบบ FB/LINE
-      // นี้ที่ไม่มี state ยาวๆ)
+      // ห้ามตอบเมนูทั่วไป/FALLBACK_MESSAGE เพราะจะดูหลุดบริบทไปเลย — เดิม (round 2) แนะนำ
+      // ให้ไปที่ LINE OA แทน แต่พลาด: ไม่ได้เช็ค channel เลย ทำให้ผู้ใช้ที่อยู่บน LINE OA
+      // อยู่แล้วโดนแนะนำให้ไปเพิ่มเพื่อน LINE OA ชื่อ/ไอดีเดียวกับที่กำลังคุยอยู่ วนซ้ำไร้
+      // ความหมาย (บั๊กจริงจาก live-test) — "redirect ไปช่องทางอื่น" ใช้เฉพาะ Issue 3
+      // (BOOKING_MENU บน Messenger) เท่านั้น เพราะเป็นกรณีเดียวที่ระบบผูกกับ LINE จริงๆ ไม่มี
+      // ทางเลือกอื่น ส่วนที่นี่ตอบตรงในแชทเดิมเสมอไม่ว่าช่องทางไหน (ดู buildSymptomFollowUpMessage)
       if (userId && hasSymptomContext(channel, userId)) {
-        const lineOa = (await config("LINE_OA")) ?? "@739fjvrr";
-        return [{
-          type: "text",
-          text:
-            "สำหรับคำถามเพิ่มเติมเกี่ยวกับอาการหรือการรักษาของน้อง แนะนำให้สอบถามผ่าน LINE Official Account " +
-            `"คลินิกบ้านเด็ก" ได้เลยค่ะ 🙏 จะได้พูดคุยรายละเอียดกันต่อได้สะดวกขึ้นนะคะ\n\n` +
-            `เพิ่มเพื่อนได้ที่ LINE ID: ${lineOa}`,
-        }];
+        return [{ type: "text", text: await buildSymptomFollowUpMessage() }];
       }
       // *** แก้ 2026-08-30 ***: เปลี่ยน hardcoded ultimate fallback จาก "สวัสดีค่ะ..."
       // เดิม (ไม่มีเบอร์/ไม่ชี้ทางกรณีเร่งด่วน) เป็น buildSafetyNetMessage() — ยัง
