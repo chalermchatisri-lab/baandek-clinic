@@ -202,6 +202,8 @@ create table if not exists articles (
   cover_image_url     text,
   content_type        text,                          -- comic-story / infographic...
   panel_images_folder text,
+  panel_count         int default 9,                 -- comic-story only: how many panel-NN files in the folder
+  panel_ext           text default 'png',             -- comic-story only: panel file extension (png/webp)
   published           boolean default false,
   body_content        text,
   display_order       int default 999,

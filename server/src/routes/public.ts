@@ -35,7 +35,7 @@ publicApi.get("/public/content-data", async (c) => {
       admin
         .from("articles")
         .select(
-          "title,category,cover_image_url,content_type,panel_images_folder,published,body_content,display_order,priority,start_date,end_date"
+          "title,category,cover_image_url,content_type,panel_images_folder,panel_count,panel_ext,published,body_content,display_order,priority,start_date,end_date"
         )
         .eq("published", true)
         .lte("start_date", nowIso)
@@ -112,6 +112,8 @@ publicApi.get("/public/content-data", async (c) => {
     Cover_Image_URL: r.cover_image_url ?? "",
     Content_Type: r.content_type,
     Panel_Images_Folder: r.panel_images_folder ?? "",
+    Panel_Count: r.panel_count ?? 9,
+    Panel_Ext: r.panel_ext ?? "png",
     Published: r.published,
     Body_Content: r.body_content ?? "",
   }));
