@@ -204,13 +204,16 @@ create table if not exists articles (
   panel_images_folder text,
   panel_count         int default 9,                 -- comic-story only: how many panel-NN files in the folder
   panel_ext           text default 'png',             -- comic-story only: panel file extension (png/webp)
+  series_slug         text,                            -- comic-story only: groups episodes into one carousel/next-episode chain
   published           boolean default false,
   body_content        text,
   display_order       int default 999,
   created_at          timestamptz not null default now(),
   start_date          timestamptz default now(),      -- visibility window start (content rotation)
   end_date            timestamptz,                     -- null = evergreen, never expires
-  priority            int default 0                    -- manual boost, breaks ties over start_date/created_at
+  priority            int default 0,                   -- manual boost, breaks ties over start_date/created_at
+  constraint chk_comic_story_series_slug
+    check (content_type is distinct from 'comic-story' or series_slug is not null)
 );
 create index if not exists idx_articles_pub on articles (published);
 
