@@ -12,6 +12,7 @@ export interface SocialPostRow {
   video_url: string | null;
   status: "pending" | "posted" | "failed";
   fb_post_id: string | null;
+  fb_video_id: string | null;
   error: string | null;
   created_at: string;
   posted_at: string | null;
@@ -22,14 +23,23 @@ export interface PublishResult {
   ok: boolean;
   fb_post_id?: string;
   error?: string;
+  stillProcessing?: boolean;
 }
 
 export interface PublishSummary {
   checked: number;
   published: number;
+  processing: number;
   failed: number;
   results: PublishResult[];
 }
+
+// Thrown when Facebook has accepted a Reel upload but hasn't finished
+// transcoding it yet — this is expected and can take well past a single
+// cron tick, not a failure. The row is left "pending" (with fb_video_id
+// persisted) so the next tick resumes at the status-check/finish step
+// instead of re-uploading.
+class ReelStillProcessingError extends Error {}
 
 function getFacebookEnv() {
   const pageId = env.fbPageId;
@@ -65,60 +75,71 @@ async function graphRequest(url: string, params: URLSearchParams): Promise<Graph
 
 // Publishes a video as a Facebook Reel using the hosted-file upload flow:
 // start (get an upload session) -> upload (point it at our public video_url)
-// -> poll processing status -> finish (publish). See Meta's Video Reels API.
+// -> check processing status -> finish (publish). See Meta's Video Reels API.
+//
+// Facebook's transcoding queue can easily outlast a single HTTP request (or
+// this free-tier host's proxy timeout), so this does a single status check
+// per call rather than blocking in a poll loop. If the video isn't ready
+// yet, it throws ReelStillProcessingError and the caller leaves the row
+// "pending" (with fb_video_id now persisted) for the next cron tick to
+// resume from the status-check step instead of re-uploading from scratch.
 async function postVideoReelToFacebook(post: SocialPostRow): Promise<string> {
   const { pageId, accessToken } = getFacebookEnv();
   const base = new URLSearchParams({ access_token: accessToken });
 
-  const start = await graphRequest(
-    `${GRAPH_API_BASE}/${pageId}/video_reels`,
-    new URLSearchParams({ ...Object.fromEntries(base), upload_phase: "start" })
-  );
-  const videoId = start.video_id as string | undefined;
-  const uploadUrl = start.upload_url as string | undefined;
-  if (!videoId || !uploadUrl) {
-    throw new Error("Facebook video_reels start phase returned no video_id/upload_url");
-  }
+  let videoId = post.fb_video_id;
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `OAuth ${accessToken}`,
-      file_url: post.video_url as string,
-    },
-  });
-  const uploadJson = (await uploadResponse.json()) as GraphResponse;
-  if (!uploadResponse.ok || uploadJson.error) {
-    const message = uploadJson.error?.message ?? `HTTP ${uploadResponse.status}`;
-    throw new Error(`Reel upload phase failed: ${message}`);
-  }
-
-  // Facebook processes the uploaded video asynchronously; poll until it's
-  // ready (or errored) before asking to publish it.
-  const deadline = Date.now() + 5 * 60 * 1000;
-  for (;;) {
-    const statusRes = await fetch(
-      `${GRAPH_API_BASE}/${videoId}?fields=status&access_token=${encodeURIComponent(accessToken)}`
+  if (!videoId) {
+    const start = await graphRequest(
+      `${GRAPH_API_BASE}/${pageId}/video_reels`,
+      new URLSearchParams({ ...Object.fromEntries(base), upload_phase: "start" })
     );
-    const statusJson = (await statusRes.json()) as GraphResponse & {
-      status?: { video_status?: string; uploading_phase?: { status?: string }; processing_phase?: { status?: string } };
-    };
-
-    if (!statusRes.ok || statusJson.error) {
-      const message = statusJson.error?.message ?? `HTTP ${statusRes.status}`;
-      throw new Error(`Reel status check failed for video_id ${videoId}: ${message}`);
+    const startedVideoId = start.video_id as string | undefined;
+    const uploadUrl = start.upload_url as string | undefined;
+    if (!startedVideoId || !uploadUrl) {
+      throw new Error("Facebook video_reels start phase returned no video_id/upload_url");
     }
 
-    const videoStatus = statusJson.status?.video_status;
+    const uploadResponse = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `OAuth ${accessToken}`,
+        file_url: post.video_url as string,
+      },
+    });
+    const uploadJson = (await uploadResponse.json()) as GraphResponse;
+    if (!uploadResponse.ok || uploadJson.error) {
+      const message = uploadJson.error?.message ?? `HTTP ${uploadResponse.status}`;
+      throw new Error(`Reel upload phase failed: ${message}`);
+    }
 
-    if (videoStatus === "ready") break;
-    if (videoStatus === "error") {
-      throw new Error(`Facebook reported video processing error for video_id ${videoId}`);
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`Timed out waiting for Facebook to finish processing video_id ${videoId}`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    videoId = startedVideoId;
+    // Persist immediately: if this process gets killed/timed out before we
+    // reach "posted" below, the next run must resume here, not re-upload.
+    await admin.from("social_posts").update({ fb_video_id: videoId }).eq("id", post.id);
+  }
+
+  const statusRes = await fetch(
+    `${GRAPH_API_BASE}/${videoId}?fields=status&access_token=${encodeURIComponent(accessToken)}`
+  );
+  const statusJson = (await statusRes.json()) as GraphResponse & {
+    status?: { video_status?: string };
+  };
+
+  if (!statusRes.ok || statusJson.error) {
+    const message = statusJson.error?.message ?? `HTTP ${statusRes.status}`;
+    throw new Error(`Reel status check failed for video_id ${videoId}: ${message}`);
+  }
+
+  const videoStatus = statusJson.status?.video_status;
+
+  if (videoStatus === "error") {
+    throw new Error(`Facebook reported video processing error for video_id ${videoId}`);
+  }
+  if (videoStatus !== "ready") {
+    throw new ReelStillProcessingError(
+      `video_id ${videoId} still processing (status: ${videoStatus ?? "unknown"}); will retry next run`
+    );
   }
 
   const finish = await graphRequest(
@@ -221,6 +242,13 @@ export async function publishPendingPosts(): Promise<PublishSummary> {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
+      if (err instanceof ReelStillProcessingError) {
+        // Not a failure — leave status "pending" (fb_video_id was already
+        // persisted) so the next cron tick resumes the status check.
+        results.push({ id: post.id, ok: false, stillProcessing: true, error: message });
+        continue;
+      }
+
       await admin.from("social_posts").update({ status: "failed", error: message }).eq("id", post.id);
 
       results.push({ id: post.id, ok: false, error: message });
@@ -230,7 +258,8 @@ export async function publishPendingPosts(): Promise<PublishSummary> {
   return {
     checked: posts.length,
     published: results.filter((r) => r.ok).length,
-    failed: results.filter((r) => !r.ok).length,
+    processing: results.filter((r) => r.stillProcessing).length,
+    failed: results.filter((r) => !r.ok && !r.stillProcessing).length,
     results,
   };
 }
