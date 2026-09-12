@@ -103,6 +103,12 @@ async function postVideoReelToFacebook(post: SocialPostRow): Promise<string> {
     const statusJson = (await statusRes.json()) as GraphResponse & {
       status?: { video_status?: string; uploading_phase?: { status?: string }; processing_phase?: { status?: string } };
     };
+
+    if (!statusRes.ok || statusJson.error) {
+      const message = statusJson.error?.message ?? `HTTP ${statusRes.status}`;
+      throw new Error(`Reel status check failed for video_id ${videoId}: ${message}`);
+    }
+
     const videoStatus = statusJson.status?.video_status;
 
     if (videoStatus === "ready") break;
