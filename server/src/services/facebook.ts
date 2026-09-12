@@ -9,6 +9,7 @@ export interface SocialPostRow {
   message: string;
   image_url: string | null;
   link_url: string | null;
+  video_url: string | null;
   status: "pending" | "posted" | "failed";
   fb_post_id: string | null;
   error: string | null;
@@ -41,9 +42,105 @@ function getFacebookEnv() {
   return { pageId, accessToken };
 }
 
-// Uses /photos when an image_url is present (caption = message), otherwise
-// /feed with the message and an optional link attachment.
+type GraphResponse = Record<string, unknown> & {
+  error?: { message?: string; type?: string; code?: number };
+};
+
+async function graphRequest(url: string, params: URLSearchParams): Promise<GraphResponse> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params,
+  });
+
+  const json = (await response.json()) as GraphResponse;
+
+  if (!response.ok || json.error) {
+    const message = json.error?.message ?? `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+
+  return json;
+}
+
+// Publishes a video as a Facebook Reel using the hosted-file upload flow:
+// start (get an upload session) -> upload (point it at our public video_url)
+// -> poll processing status -> finish (publish). See Meta's Video Reels API.
+async function postVideoReelToFacebook(post: SocialPostRow): Promise<string> {
+  const { pageId, accessToken } = getFacebookEnv();
+  const base = new URLSearchParams({ access_token: accessToken });
+
+  const start = await graphRequest(
+    `${GRAPH_API_BASE}/${pageId}/video_reels`,
+    new URLSearchParams({ ...Object.fromEntries(base), upload_phase: "start" })
+  );
+  const videoId = start.video_id as string | undefined;
+  const uploadUrl = start.upload_url as string | undefined;
+  if (!videoId || !uploadUrl) {
+    throw new Error("Facebook video_reels start phase returned no video_id/upload_url");
+  }
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `OAuth ${accessToken}`,
+      file_url: post.video_url as string,
+    },
+  });
+  const uploadJson = (await uploadResponse.json()) as GraphResponse;
+  if (!uploadResponse.ok || uploadJson.error) {
+    const message = uploadJson.error?.message ?? `HTTP ${uploadResponse.status}`;
+    throw new Error(`Reel upload phase failed: ${message}`);
+  }
+
+  // Facebook processes the uploaded video asynchronously; poll until it's
+  // ready (or errored) before asking to publish it.
+  const deadline = Date.now() + 5 * 60 * 1000;
+  for (;;) {
+    const statusRes = await fetch(
+      `${GRAPH_API_BASE}/${videoId}?fields=status&access_token=${encodeURIComponent(accessToken)}`
+    );
+    const statusJson = (await statusRes.json()) as GraphResponse & {
+      status?: { video_status?: string; uploading_phase?: { status?: string }; processing_phase?: { status?: string } };
+    };
+    const videoStatus = statusJson.status?.video_status;
+
+    if (videoStatus === "ready") break;
+    if (videoStatus === "error") {
+      throw new Error(`Facebook reported video processing error for video_id ${videoId}`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for Facebook to finish processing video_id ${videoId}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  const finish = await graphRequest(
+    `${GRAPH_API_BASE}/${pageId}/video_reels`,
+    new URLSearchParams({
+      ...Object.fromEntries(base),
+      upload_phase: "finish",
+      video_id: videoId,
+      video_state: "PUBLISHED",
+      description: post.message,
+    })
+  );
+
+  if (!finish.success) {
+    throw new Error("Facebook video_reels finish phase did not report success");
+  }
+
+  return videoId;
+}
+
+// Uses /video_reels when a video_url is present, /photos when an image_url
+// is present (caption = message), otherwise /feed with the message and an
+// optional link attachment.
 async function postToFacebook(post: SocialPostRow): Promise<string> {
+  if (post.video_url) {
+    return postVideoReelToFacebook(post);
+  }
+
   const { pageId, accessToken } = getFacebookEnv();
 
   const usePhotoEndpoint = Boolean(post.image_url);
@@ -61,25 +158,10 @@ async function postToFacebook(post: SocialPostRow): Promise<string> {
     if (post.link_url) body.set("link", post.link_url);
   }
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  const json = (await response.json()) as {
-    id?: string;
-    post_id?: string;
-    error?: { message?: string; type?: string; code?: number };
-  };
-
-  if (!response.ok || json.error) {
-    const message = json.error?.message ?? `HTTP ${response.status}`;
-    throw new Error(message);
-  }
+  const json = await graphRequest(endpoint, body);
 
   // /photos returns { id, post_id }; /feed returns { id }
-  const fbPostId = json.post_id ?? json.id;
+  const fbPostId = (json.post_id as string | undefined) ?? (json.id as string | undefined);
   if (!fbPostId) {
     throw new Error("Facebook API returned no post id");
   }
