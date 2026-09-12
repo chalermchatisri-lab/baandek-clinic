@@ -100,12 +100,27 @@ async function postVideoReelToFacebook(post: SocialPostRow): Promise<string> {
       throw new Error("Facebook video_reels start phase returned no video_id/upload_url");
     }
 
+    // rupload.facebook.com's resumable-upload protocol requires Offset and
+    // file_size on every transfer, even for a "hosted file" upload — passing
+    // only a file_url header (per Meta's Reels API docs) silently accepts
+    // the request without actually fetching the video, leaving the reel
+    // stuck at upload_complete/not_started forever. So instead we fetch the
+    // video ourselves and PUT the raw bytes with the required headers.
+    const videoRes = await fetch(post.video_url as string);
+    if (!videoRes.ok) {
+      throw new Error(`Failed to download video from ${post.video_url}: HTTP ${videoRes.status}`);
+    }
+    const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+
     const uploadResponse = await fetch(uploadUrl, {
       method: "POST",
       headers: {
         Authorization: `OAuth ${accessToken}`,
-        file_url: post.video_url as string,
+        Offset: "0",
+        file_size: String(videoBuffer.length),
+        "Content-Type": "application/octet-stream",
       },
+      body: videoBuffer,
     });
     const uploadJson = (await uploadResponse.json()) as GraphResponse;
     if (!uploadResponse.ok || uploadJson.error) {
