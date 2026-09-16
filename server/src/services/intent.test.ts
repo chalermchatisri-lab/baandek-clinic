@@ -69,6 +69,16 @@ describe("detectIntent — round 3 bug fixes", () => {
     expect(r.intent).toBe("VACCINE_DELAY");
   });
 
+  // ภาพ 2 verbatim (live-test failure after the first push): never says
+  // "วัคซีน"/"ฉีด" at all — only "ครบ 2 เดือน...กำหนดล่าช้า", relying on the
+  // age-milestone phrasing as the vaccine-context signal instead of the literal
+  // word. The first version of isVaccineDelayQuestion required the literal word
+  // and missed this, falling through all the way to the generic fallback menu.
+  it("routes the ภาพ 2 verbatim message to VACCINE_DELAY with no literal วัคซีน/ฉีด word", async () => {
+    const r = await detectIntent("ลูกครบ 2 เดือน วันที่ 16 กำหนดล่าช้าได้กี่วัน");
+    expect(r.intent).toBe("VACCINE_DELAY");
+  });
+
   // Negative case: an actual appointment-reschedule request must still win over
   // the new delay pattern (no "กี่วัน"/"ล่าช้า" here, so isVaccineDelayQuestion
   // should not fire, and apptChange's "เลื่อนนัด" keeps matching as before).
