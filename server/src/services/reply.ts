@@ -377,6 +377,19 @@ async function buildAgeGroupReply(
   return [{ type: "text", text: await buildAgeGroupVaccineList(group.codes, group.label, link, ageMonths) }];
 }
 
+// *** เพิ่ม 2026-09-16 (round 3, ภาพ 1 — ด่วน/PDPA) ***: เคสจริงบน FB Messenger — ผู้ปกครอง
+// พิมพ์เบอร์โทรมา บอทค้นแล้วตอบกลับข้อมูลนัดหมายจริง (ชื่อเด็ก + วันนัด) ตรงๆ ผ่าน FB ทั้งที่
+// ตกลงกันไว้ตั้งแต่แรกว่าการเช็ค/แจ้งนัดหมายจริงต้องทำผ่าน LINE OA เท่านั้น — ห้ามคืนข้อมูล
+// นัดหมายจริงผ่าน FB เด็ดขาด (ทั้งชื่อเด็กและวันนัดถือเป็นข้อมูลส่วนบุคคล มีความเสี่ยง PDPA)
+// ใช้ข้อความนี้แทนทุกจุดที่ Messenger เคยเดินเข้าสู่ flow เช็คนัดหมายด้วยเบอร์โทร
+async function buildAppointmentCheckRedirectToLineMessage(): Promise<string> {
+  const lineOa = (await config("LINE_OA")) ?? "@739fjvrr";
+  return (
+    "ขออภัยค่ะ การเช็คนัดหมายด้วยเบอร์โทรทำได้เฉพาะทาง LINE Official Account เท่านั้นค่ะ 🙏\n\n" +
+    `เพิ่มเพื่อนได้ที่ LINE ID: ${lineOa} แล้วพิมพ์เบอร์โทรที่ลงทะเบียนไว้ในแชท LINE ได้เลยค่ะ`
+  );
+}
+
 async function buildIncompletePhoneMessage(): Promise<string> {
   const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
   return (
@@ -530,7 +543,13 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
   }
 
   // Fast path: a lone phone number = user answering the appointment prompt.
+  // *** แก้ 2026-09-16 (round 3, ภาพ 1 — ด่วน/PDPA) *** — ดูคอมเมนต์ที่
+  // buildAppointmentCheckRedirectToLineMessage() ด้านบน: ห้ามคืนข้อมูลนัดหมายจริงผ่าน FB
+  // เด็ดขาด เช็ค channel ก่อนเรียก buildAppointmentResultByPhone() เสมอ
   if (looksLikePhoneAttempt(text)) {
+    if (channel === "messenger") {
+      return [{ type: "text", text: await buildAppointmentCheckRedirectToLineMessage() }];
+    }
     if (!isCompletePhone(text)) {
       return [{ type: "text", text: await buildIncompletePhoneMessage() }];
     }
@@ -628,6 +647,11 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
     }
     case "MEDICAL_QUESTION":
       return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
+    // *** เพิ่ม 2026-09-16 (round 3, ภาพ 2) ***: "เลื่อน/ล่าช้าฉีดวัคซีนได้กี่วัน" — ระยะห่าง
+    // ที่ยอมรับได้จริงเป็นเรื่องการแพทย์ (ขึ้นกับชนิดวัคซีน/ประวัติของแต่ละคน) ไม่ hardcode
+    // จำนวนวันเอง ใช้ DOCTOR_REFERRAL เดิม (ดูคอมเมนต์ที่ isVaccineDelayQuestion ใน intent.ts)
+    case "VACCINE_DELAY":
+      return [{ type: "text", text: DOCTOR_REFERRAL }];
     // *** เพิ่ม 2026-09-06 (round 2, issue 2) ***: คลินิกไม่มีแพ็กเกจวัคซีนรวม — ตอบตรงๆ
     // ว่าไม่มี แล้วชี้ไปดูราคา/โปรโมชันแยกรายตัวที่ vaccine advisor แทนการปล่อยให้ตกไป
     // การ์ดเลือกอายุ (ไม่ตรงคำถามที่ถามถึง "แพ็กเกจ" ไม่ใช่ "อายุน้อง")
@@ -748,15 +772,23 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
       // buildAppointmentResultByPhone(). A bare phone number is unambiguous enough to
       // route on its own, so there's no need to track who was asked (matches the
       // old Cloudflare Worker's flow minus its awaiting-phone KV state).
+      //
+      // *** แก้ 2026-09-16 (round 3, ภาพ 1 — ด่วน/PDPA) ***: Messenger ต้องไม่เข้า flow
+      // นี้เลย — ดูคอมเมนต์ที่ buildAppointmentCheckRedirectToLineMessage() ด้านบน ห้ามแม้แต่
+      // ชวนให้พิมพ์เบอร์โทรบน FB เพราะ fast-path ด้านบนจะกันไม่ให้ lookup จริงอยู่แล้วก็จริง
+      // แต่ปล่อยให้ผู้ใช้พิมพ์เบอร์เข้ามาเปล่าประโยชน์ ควร redirect ไป LINE OA ตั้งแต่จุดนี้เลย
+      if (channel === "messenger") {
+        return [{ type: "text", text: await buildAppointmentCheckRedirectToLineMessage() }];
+      }
+      // channel === "line" only past this point — messenger already returned above.
       const base =
         "กรุณาพิมพ์เบอร์โทรศัพท์ที่ลงทะเบียนนัดหมายไว้ (10 หลัก) ค่ะ 📱\n\n" +
         "ระบบจะตรวจสอบนัดหมายที่กำลังจะถึงให้นะคะ\n\n" +
         "⚠️ ระบบค้นหาด้วยเบอร์โทรศัพท์ กรุณาตรวจสอบว่าเบอร์ถูกต้อง เผื่อกรณีเบอร์ถูกส่งต่อ/เปลี่ยนมือ อาจแสดงข้อมูลของผู้อื่นได้";
-      // LINE-only UI hint: on LINE the keyboard is often collapsed behind the Rich
-      // Menu, so parents don't see where to type. Irrelevant on Messenger.
+      // LINE-only UI hint: the keyboard is often collapsed behind the Rich Menu.
       const lineHint =
         "\n\nหากไม่เห็นช่องพิมพ์ข้อความ กรุณากดไอคอนคีย์บอร์ด ⌨️ ที่มุมซ้ายล่างก่อนนะคะ";
-      return [{ type: "text", text: channel === "line" ? base + lineHint : base }];
+      return [{ type: "text", text: base + lineHint }];
     }
     // *** เพิ่ม 2026-09-01 (bug 5) ***: เดิม "นัด" ใน apptChange (bare keyword) ดักคำถามยืนยัน
     // มาตามนัดเดิม (เช่น "...หรือไปก่อนคะ") ไปตอบเนื้อหาเลื่อนนัดทั้งที่ลูกค้าไม่ได้ขอเลื่อน —

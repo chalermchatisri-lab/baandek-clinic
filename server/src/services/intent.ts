@@ -16,6 +16,7 @@ export type Intent =
   | "VACCINE_INFO"
   | "VACCINE_PACKAGE"
   | "VACCINE_GENERAL_INFO"
+  | "VACCINE_DELAY"
   | "MEDICAL_QUESTION"
   | "PRODUCT_STOCK_INQUIRY"
   | "SERVICES"
@@ -182,6 +183,31 @@ const TEMPERATURE_READING = /\d+(\.\d+)?\s*(องศา|°c?)/i;
 // อายุอย่าง "ลูกอายุ 6 เดือน ต้องฉีดอะไรบ้าง" จะโดนแย่งไปตอบผิดทาง (ต้องคงพฤติกรรมเดิม)
 const VACCINE_HOWTO_PATTERN = /ทำ(ยังไง|ไง|อย่างไร)/;
 
+// *** เพิ่ม 2026-09-16 (round 3, ภาพ 2) ***: เคสจริงบน FB Messenger — ผู้ปกครองถามว่าลูกครบ
+// 2 เดือนวันที่ 16 "ต้องฉีดวันนั้นเลยหรือล่าช้าได้กี่วัน" บอทตอบแค่เวลาเปิด-ปิดคลินิกวันที่ 16
+// เพราะข้อความมี "วันที่ 16" ปนอยู่ โดน extractSpecificDayOfMonth() ด้านล่างดักไปก่อน (เช็คก่อน
+// ทุก intent ที่เจาะจงกว่ารวมถึง vaccine gate) ทั้งที่คำถามจริงคือ "เลื่อนฉีดวัคซีนได้กี่วัน" ไม่ใช่
+// "วันที่ 16 เปิดไหม" — เพิ่มเช็คนี้ก่อน specificDay เสมอ (ดู detectIntent) ต้องมีทั้งคำบ่งชี้
+// วัคซีน/ฉีด และคำเรื่องล่าช้า/เลื่อน ไม่ใช่ bare "เลื่อน" อย่างเดียว (จะไปชนกับ apptChange's
+// "เลื่อนนัด"/"ขอเลื่อน" ซึ่งเช็คก่อนอยู่แล้วและควรชนะกรณีขอเลื่อนนัดจริงๆ) คำตอบใช้ DOCTOR_REFERRAL
+// เดิม (ดู reply.ts) ไม่ได้เขียนเกณฑ์จำนวนวันใหม่เอง — เกณฑ์ระยะห่างเข็มเป็นเรื่องการแพทย์ ต้อง
+// ให้แพทย์ที่คลินิกประเมินเป็นรายบุคคล (สอดคล้องกับ DOCTOR_NOTE ใน vaccine.ts ที่พูดถึง
+// "รับวัคซีนล่าช้า" ไว้แล้วว่าต้องปรึกษาแพทย์)
+function isVaccineDelayQuestion(text: string): boolean {
+  const mentionsVaccine = text.includes("วัคซีน") || text.includes("ฉีด");
+  const mentionsDelay = /ล่าช้า|เลื่อนฉีด|เลื่อนวัคซีน|ช้ากว่ากำหนด/.test(text) ||
+    (text.includes("เลื่อน") && text.includes("กี่วัน"));
+  return mentionsVaccine && mentionsDelay;
+}
+
+// *** เพิ่ม 2026-09-16 (round 3, ภาพ 2 + ภาพ 6) ***: ป้องกัน extractSpecificDayOfMonth()
+// ด้านล่าง (bare "วันที่ N") ไม่ให้แย่งคำถามที่จริงๆ เป็นเรื่องวัคซีน/นัดหมายไปตอบผิดทางเป็นแค่
+// "วันที่ N เปิด-ปิดกี่โมง" — ภาพ 6 เป็นอีกเคสรูปแบบเดียวกัน: "แจ้งฉีดรอบก่อนวันที่ 14 ก.ค. ...
+// นัดใหม่ไม่มีเขียนในสมุด ครบ 2 เดือนแล้วเข้ามาได้เลยไหม" บอทตอบวันเปิดคลินิกซึ่งไม่มีใครถาม —
+// ข้อความที่มีคำเหล่านี้ปนอยู่กับ "วันที่ N" ควรปล่อยผ่านไปให้ intent ที่เจาะจงกว่าด้านล่าง
+// (vaccine gate, apptChange ฯลฯ) ตัดสินแทน ไม่ใช่ตัดจบที่นี่ก่อนเลย
+const SPECIFIC_DATE_DISTRACTOR_PATTERN = /วัคซีน|ฉีด|สมุด|กี่วัน|ล่าช้า/;
+
 export function parseAgeMonths(text: string): number | null {
   const t = norm(text);
   const y = t.match(/(\d+)\s*(?:ปี|ขวบ)/);
@@ -269,14 +295,23 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.apptConfirm)) return { intent: "APPOINTMENT_CONFIRM", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
 
+  // Checked before extractSpecificDayOfMonth() below — a "delay/how many days late
+  // can the dose be" question often names a specific day-of-month too (e.g. "ลูกครบ
+  // 2 เดือนวันที่ 16 ต้องฉีดวันนั้นเลยหรือล่าช้าได้กี่วัน") and must not be answered
+  // with that day's clinic hours (ดูคอมเมนต์ที่ isVaccineDelayQuestion ด้านบน)
+  if (isVaccineDelayQuestion(text)) return { intent: "VACCINE_DELAY", text };
+
   // Checked before the generic KW.status match below, which would otherwise catch
   // these via a bare "เปิดไหม"/"ปิดไหม" and wrongly answer with *today's* status.
   // No open/close word required here — CLINIC_DATE_UNCLEAR's own redirect message
   // tells the user to type exactly "วันที่ 12" with nothing else, so a bare
   // "วันที่ N" must be enough on its own (a live-test bug: it wasn't, and matching
   // digits with nothing else fell all the way through to FALLBACK_MESSAGE).
+  // *** แก้ 2026-09-16 (round 3, ภาพ 2 + ภาพ 6) ***: แต่ถ้ามี distractor (วัคซีน/ฉีด/สมุด/
+  // กี่วัน/ล่าช้า) ปนอยู่ด้วย ปล่อยผ่านไปให้ intent เจาะจงกว่าด้านล่างตัดสินแทน (ดูคอมเมนต์ที่
+  // SPECIFIC_DATE_DISTRACTOR_PATTERN ด้านบน)
   const specificDay = extractSpecificDayOfMonth(text);
-  if (specificDay !== null) {
+  if (specificDay !== null && !SPECIFIC_DATE_DISTRACTOR_PATTERN.test(text)) {
     return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, specificDay };
   }
   if (isClinicDateUnclear(text)) {
@@ -287,7 +322,13 @@ export async function detectIntent(message: string): Promise<IntentResult> {
     return { intent: "CLINIC_STATUS", text };
   if (has(text, KW.time))       return { intent: "CLINIC_TIME", text };
   if (has(text, KW.location))   return { intent: "LOCATION", text };
-  if (has(text, KW.services))   return { intent: "SERVICES", text };
+  // *** แก้ 2026-09-16 (round 3, ภาพ 5) ***: เคสจริงบน FB Messenger — ถามราคาฉีดวัคซีนของเด็ก
+  // อายุ 4 เดือน บอทตอบเมนูบริการทั่วไป (คลินิกตรวจโรค/คลินิกสุขภาพเด็กดี) เพราะข้อความมีคำว่า
+  // "บริการ" ปนอยู่ (เช่น "สอบถามบริการฉีดวัคซีน...") ซึ่งเช็คก่อน vaccine gate ด้านล่างเสมอ —
+  // บั๊ก pattern เดียวกับที่เคยแก้ (KW ทั่วไปดักก่อน intent เจาะจงกว่า) ต้องไม่ให้ "บริการ" ชนะ
+  // เมื่อข้อความมีคำวัคซีน/ฉีดด้วย ปล่อยผ่านไปให้ vaccine gate (price/availability/info ตามอายุ) ตัดสินแทน
+  if (has(text, KW.services) && !(text.includes("วัคซีน") || text.includes("ฉีด")))
+    return { intent: "SERVICES", text };
   if (has(text, KW.closureAnnounce)) return { intent: "CLOSURE_ANNOUNCEMENT", text };
   if (has(text, KW.vaccineNew))      return { intent: "VACCINE_NEWS", text };
   if (has(text, KW.promo))           return { intent: "PROMOTIONS", text };

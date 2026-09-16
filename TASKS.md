@@ -24,6 +24,13 @@
 - [ ] Gemini fallback for UNKNOWN intent
 - [ ] Messenger webhook parity
 - [ ] Retire Cloudflare Worker
+- [ ] Follow-up (round 3, ภาพ 1): human-handoff mute for Messenger — detect a
+      staff member typing manually in Page Inbox via `message_echoes` (is_echo
+      with no matching app_id) and suppress ALL bot auto-replies to that PSID
+      for a TTL, same pattern as `lib/symptomContext.ts`. Needs `message_echoes`
+      enabled in the Meta App Dashboard webhook subscription first (manual,
+      outside this repo). Current fix only stops the PDPA data leak (redirects
+      to LINE OA); it does not yet stop the bot from replying over a human agent.
 
 ## 🚧 Phase 3 — Dashboard (React)
 - [ ] Auth (Supabase)
