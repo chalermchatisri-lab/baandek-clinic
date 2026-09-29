@@ -57,6 +57,9 @@ git push
 - `buildVaccineAdvice(group, ageMonths)` — data-driven from vaccine_rules (replaces 14 Demo builders)
 ### server/src/lib/supabase.ts
 - `admin` — service-role client (backend)
+### server/src/lib/humanHandoff.ts
+- `markHumanHandling(channel, userId)` / `isHumanHandling(channel, userId)` — 30-min mute
+  when Messenger `message_echoes` shows a staff member typing via Page Inbox (no app_id)
 ### server/src/routes/
 - `line.ts` — POST /webhook/line
 - `messenger.ts` — GET+POST /webhook/messenger

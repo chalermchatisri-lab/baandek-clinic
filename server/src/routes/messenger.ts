@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { env } from "../lib/env";
 import { buildReplyMessages, buildMedicalQuestionAttachmentMessage, type ReplyMessage } from "../services/reply";
+import { markHumanHandling, isHumanHandling } from "../lib/humanHandoff";
 
 export const messenger = new Hono();
 
@@ -73,6 +74,21 @@ messenger.post("/webhook/messenger", async (c) => {
     events
       .filter((m: any) => m.sender?.id && (m.message?.text || m.message?.attachments))
       .map(async (m: any) => {
+        // *** เพิ่ม 2026-09-29 (round 4, human-handoff — ดูคอมเมนต์เต็มใน lib/humanHandoff.ts)
+        // ***: message_echoes event (เจ้าหน้าที่พิมพ์เองผ่าน Page Inbox หรือบอทส่งเองผ่าน Send
+        // API) มีรูปร่างเดียวกับข้อความลูกค้าทุกประการ (มี sender.id + message.text) ต้องแยก
+        // ก่อนถึง filter ปกติเสมอ ไม่งั้นจะหลุดเข้า buildReplyMessages() เป็นข้อความลูกค้าปลอมๆ
+        // — echo ที่มี app_id = บอทเราส่งเอง (ไม่ต้องทำอะไร) / ไม่มี app_id = เจ้าหน้าที่พิมพ์เอง
+        // (mute PSID นี้ 30 นาที) ทั้งสองกรณีห้ามส่งข้อความตอบกลับใดๆ เด็ดขาด
+        if (m.message?.is_echo) {
+          if (!m.message?.app_id && m.recipient?.id) {
+            markHumanHandling("messenger", m.recipient.id);
+          }
+          return;
+        }
+        // เจ้าหน้าที่กำลังคุยเองอยู่ตอนนี้ (echo ล่าสุดจาก PSID นี้ยังไม่หมดอายุ) — เงียบสนิท
+        // ไม่ส่งอะไรกลับเลย ไม่ใช่แค่เปลี่ยนคำตอบ (ดูคอมเมนต์เต็มใน lib/humanHandoff.ts)
+        if (isHumanHandling("messenger", m.sender.id)) return;
         try {
           // *** เพิ่ม 2026-09-01 (bug 4, ยืนยันแล้ว 1 ก.ย.) ***: Messenger ไม่มี attachment
           // type "sticker" แยกจริงๆ เหมือน LINE — sticker (รวมปุ่ม thumbs-up มาตรฐาน) ส่งมา

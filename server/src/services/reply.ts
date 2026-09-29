@@ -647,11 +647,57 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
     }
     case "MEDICAL_QUESTION":
       return [{ type: "text", text: await buildMedicalQuestionTextMessage() }];
+    // *** เพิ่ม 2026-09-29 (round 4, Priority 1 — medical safety) ***: ข้อความปฐมพยาบาลตาม
+    // คำต่อคำที่ยืนยันจาก Yai ตรงๆ — ไม่แต่งเพิ่ม/ตัดทอน เพราะเป็นเรื่องความปลอดภัยทางการแพทย์
+    case "ANIMAL_BITE":
+      return [{
+        type: "text",
+        text:
+          "⚠️ กรณีโดนสัตว์กัดหรือข่วน กรุณาปฐมพยาบาลทันที:\n\n" +
+          "ล้างแผลด้วยน้ำสะอาดและสบู่ทันที 15 นาที พร้อมไปพบแพทย์เพื่อรับวัคซีนป้องกันโรคพิษสุนัขบ้าและบาดทะยักโดยเร็วที่สุด",
+      }];
     // *** เพิ่ม 2026-09-16 (round 3, ภาพ 2) ***: "เลื่อน/ล่าช้าฉีดวัคซีนได้กี่วัน" — ระยะห่าง
     // ที่ยอมรับได้จริงเป็นเรื่องการแพทย์ (ขึ้นกับชนิดวัคซีน/ประวัติของแต่ละคน) ไม่ hardcode
     // จำนวนวันเอง ใช้ DOCTOR_REFERRAL เดิม (ดูคอมเมนต์ที่ isVaccineDelayQuestion ใน intent.ts)
     case "VACCINE_DELAY":
       return [{ type: "text", text: DOCTOR_REFERRAL }];
+    // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 5 ขวา) ***: "อยากให้นัดวัคซีนตัวต่อไป
+    // ต้องไปฉีดเมื่อไหร่" — ไม่มีวันฉีดล่าสุดในข้อความให้คำนวณกำหนดที่แน่นอนได้ (ระบบยังไม่มี
+    // conversation memory ข้ามข้อความ) ตอบกว้างๆ ตามที่ Yai ระบุ: รายชื่อวัคซีนช่วงอายุ 1 ปี
+    // (ดึงจาก DB จริงผ่าน buildAgeGroupVaccineList — data-driven ตาม Iron Rule "data over
+    // code") + กฎทั่วไปห่างจากเข็มก่อนหน้าอย่างน้อย 1 เดือน + แนะนำนำสมุดวัคซีนมาให้แพทย์ยืนยัน
+    case "VACCINE_NEXT_DOSE": {
+      const link = (await config("VACCINE_ADVISOR")) ??
+        "https://baandek-line-worker.baandek-clinic.workers.dev/vaccine-advisor";
+      const list = await buildAgeGroupVaccineList(["12M"], "1 ปี", link, 12);
+      return [{
+        type: "text",
+        text:
+          "กำหนดวัคซีนเข็ม/ตัวต่อไปของน้อง ขึ้นกับวัคซีนที่เคยได้รับและอายุปัจจุบันค่ะ 🩺 หลักทั่วไปคือควรห่างจากเข็ม/ครั้งก่อนหน้าอย่างน้อย 1 เดือน\n\n" +
+          "ตัวอย่างวัคซีนช่วงอายุ 1 ปี:\n\n" + list +
+          "\n\nกรุณานำสมุดวัคซีนของน้องมาให้แพทย์ตรวจเพื่อยืนยันวันนัดที่แน่นอนอีกครั้งค่ะ",
+      }];
+    }
+    // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 1) ***: "แบบ2เข็มกับเข็มเดียวต่างกันไม่คะ"
+    // — คำถามต่อเนื่องที่ไม่มีชื่อวัคซีนในข้อความนี้เอง ไม่ hardcode ข้อมูลจำนวนเข็มต่อวัคซีน
+    // (ขัด Iron Rule "data over code") ตอบกว้างๆ ขอให้ระบุชื่อวัคซีน/ให้เจ้าหน้าที่ช่วยแทน
+    case "VACCINE_DOSE_COUNT_QUESTION":
+      return [{
+        type: "text",
+        text:
+          "จำนวนเข็มและความแตกต่างของแต่ละสูตรขึ้นกับชนิดวัคซีนค่ะ 💉 รบกวนระบุชื่อวัคซีนที่สอบถาม หรือสอบถามรายละเอียดกับเจ้าหน้าที่ที่คลินิกได้เลยค่ะ",
+      }];
+    // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 8-9) ***: ตรวจแล็บ (RSV/เจาะเลือด) ต้อง
+    // เช็ครายละเอียดการเตรียมตัว/คิวตรวจกับเจ้าหน้าที่ก่อนเสมอ ไม่ตอบข้อมูลทางการแพทย์เอง
+    case "LAB_TEST_INQUIRY": {
+      const phone = (await config("PHONE")) ?? CLINIC_PHONE_FALLBACK;
+      return [{
+        type: "text",
+        text:
+          "สำหรับการตรวจแล็บ (เช่น ตรวจ RSV/เจาะเลือด) กรุณาสอบถามและนัดหมายกับเจ้าหน้าที่โดยตรงนะคะ 🙏 " +
+          `เนื่องจากต้องเช็ครายละเอียดการเตรียมตัวและคิวตรวจก่อนค่ะ ☎️ ${phone}`,
+      }];
+    }
     // *** เพิ่ม 2026-09-06 (round 2, issue 2) ***: คลินิกไม่มีแพ็กเกจวัคซีนรวม — ตอบตรงๆ
     // ว่าไม่มี แล้วชี้ไปดูราคา/โปรโมชันแยกรายตัวที่ vaccine advisor แทนการปล่อยให้ตกไป
     // การ์ดเลือกอายุ (ไม่ตรงคำถามที่ถามถึง "แพ็กเกจ" ไม่ใช่ "อายุน้อง")
@@ -719,18 +765,28 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
     // getClinicStatus() already handles any target date correctly (clinic_hours +
     // closures), so this only needed the day-of-month -> nearest-real-date math above.
     case "CLINIC_STATUS_SPECIFIC_DATE": {
-      const now = new Date(Date.now() + 7 * 3600 * 1000);
-      const target = resolveUpcomingDateByDayOfMonth(r.specificDay!, now);
-      if (!target) {
+      // *** แก้ 2026-09-29 (round 4, Priority 2) ***: r.resolvedDate (ถ้ามี) คือ ISO date ที่
+      // แปลงเสร็จแล้วจาก "วันที่+เดือน(+ปี)" หรือชื่อวันในสัปดาห์ที่ฝังอยู่ในประโยค (ดู
+      // extractExplicitDate/extractBareWeekdayDate ใน intent.ts) — ใช้ตรงๆ ไม่ต้อง roll-forward
+      // แบบ specificDay (bare "วันที่ N" ไม่มีเดือน ซึ่งยังกำกวมว่าเดือนไหนอยู่)
+      let targetYmd: string | null;
+      if (r.resolvedDate) {
+        targetYmd = r.resolvedDate;
+      } else {
+        const now = new Date(Date.now() + 7 * 3600 * 1000);
+        const target = resolveUpcomingDateByDayOfMonth(r.specificDay!, now);
+        targetYmd = target ? ymdOf(target) : null;
+      }
+      if (!targetYmd) {
         return [{
           type: "text",
           text: `ขออภัยค่ะ ไม่พบวันที่ ${r.specificDay} ในเดือนนี้หรือเดือนหน้าค่ะ กรุณาตรวจสอบวันที่อีกครั้งนะคะ`,
         }];
       }
-      const status = await getClinicStatus(ymdOf(target));
+      const status = await getClinicStatus(targetYmd);
       const parts: string[] = [(status.isOpen ? "🟢 " : "🔴 ") + status.text];
       if (!status.isOpen) {
-        const line = await nextOpenDateLine(target);
+        const line = await nextOpenDateLine(new Date(targetYmd + "T00:00:00Z"));
         if (line) parts.push(line);
       }
       return [{ type: "text", text: parts.join("\n\n") }];

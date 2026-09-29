@@ -129,3 +129,133 @@ describe("detectIntent — round 3 bug fixes", () => {
     expect(r.intent).toBe("SERVICES");
   });
 });
+
+describe("detectIntent — round 4 bug fixes", () => {
+  // Priority 1 (medical safety), ภาพ 7 ซ้าย verbatim: a typo for "โดนแมวข่วน" (cat scratch)
+  // used to be read as a generic "มีวัคซีน...ไหม" availability question and show the
+  // age-picker — now must win over every other intent.
+  it("routes the ภาพ 7 verbatim animal-scratch typo to ANIMAL_BITE, not a vaccine question", async () => {
+    const r = await detectIntent("มีวัคซีนแมวช่วนไหม");
+    expect(r.intent).toBe("ANIMAL_BITE");
+  });
+
+  it("routes a correctly-spelled dog bite to ANIMAL_BITE", async () => {
+    const r = await detectIntent("ลูกโดนหมากัดที่ขา ต้องทำยังไง");
+    expect(r.intent).toBe("ANIMAL_BITE");
+  });
+
+  // Priority 2, ภาพ 3 verbatim (both messages): an explicit day+month+year, and a
+  // bare weekday name, embedded in a free-form sentence — must resolve directly
+  // instead of asking the user to retype as "วันที่ 12".
+  it("resolves an explicit day+month+year embedded in a sentence to CLINIC_STATUS_SPECIFIC_DATE", async () => {
+    const r = await detectIntent("วันอาทิตย์ที่ 27 ก.ย.69 เปิดช่วงเย็นไหม");
+    expect(r.intent).toBe("CLINIC_STATUS_SPECIFIC_DATE");
+    expect(r.resolvedDate).toBe("2026-09-27");
+  });
+
+  it("resolves a bare weekday-only status question to CLINIC_STATUS_SPECIFIC_DATE instead of CLINIC_DATE_UNCLEAR", async () => {
+    const r = await detectIntent("วันอาทิตย์เปิดมั้ย");
+    expect(r.intent).toBe("CLINIC_STATUS_SPECIFIC_DATE");
+    expect(r.resolvedDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  // Regression: a bare weekday with no open/close question word must not be
+  // hijacked — e.g. "เวลาทำการวันจันทร์" still belongs to CLINIC_TIME.
+  it("still routes 'เวลาทำการวันจันทร์' to CLINIC_TIME, not a resolved weekday date", async () => {
+    const r = await detectIntent("เวลาทำการวันจันทร์กี่โมงคะ");
+    expect(r.intent).toBe("CLINIC_TIME");
+  });
+
+  // Priority 3, ภาพ 5 ขวา verbatim: "next dose" timing question must not be
+  // swallowed by apptChange's bare "นัด".
+  it("routes the ภาพ 5 ขวา verbatim next-dose question to VACCINE_NEXT_DOSE, not APPOINTMENT_CHANGE", async () => {
+    const r = await detectIntent("อยากให้นัดวัคซีนตัวต่อไป ต้องไปฉีดเมื่อไหร่");
+    expect(r.intent).toBe("VACCINE_NEXT_DOSE");
+  });
+
+  // Regression: a genuine reschedule request must still win.
+  it("still routes a plain reschedule request to APPOINTMENT_CHANGE (round 4 regression)", async () => {
+    const r = await detectIntent("เลื่อนนัดได้ไหมคะ");
+    expect(r.intent).toBe("APPOINTMENT_CHANGE");
+  });
+
+  // Priority 3, ภาพ 5 ซ้าย verbatim fragment: "ครึ่ง" (half-year) age parsing + the
+  // widened vaccine gate (now also triggers on "ฉีด", not just "วัคซีน").
+  it("routes the ภาพ 5 ซ้าย verbatim question to a vaccine-info intent with ageMonths=18 (1.5 years)", async () => {
+    const r = await detectIntent("วันนี้เข้าไปฉีด 1 ขวบครึ่งได้ไหม");
+    expect(r.intent).toBe("VACCINE_INFO");
+    expect(r.ageMonths).toBe(18);
+  });
+
+  it("parseAgeMonths understands 'X ปีครึ่ง' / 'X ขวบครึ่ง'", async () => {
+    const { parseAgeMonths } = await import("./intent");
+    expect(parseAgeMonths("1 ปีครึ่ง")).toBe(18);
+    expect(parseAgeMonths("2 ขวบครึ่ง")).toBe(30);
+  });
+
+  // Priority 3, ภาพ 1 verbatim: a dose-count follow-up question with zero vaccine
+  // signal of its own — answered generically rather than falling to fallback.
+  it("routes the ภาพ 1 verbatim dose-count question to VACCINE_DOSE_COUNT_QUESTION", async () => {
+    const r = await detectIntent("แบบ2เข็มกับเข็มเดียวต่างกันไม่คะ");
+    expect(r.intent).toBe("VACCINE_DOSE_COUNT_QUESTION");
+  });
+
+  // Priority 3, ภาพ 8-9 (illustrative — exact screenshot wording unavailable): a lab
+  // test question must not fall through to the fallback menu, and must not steal a
+  // legitimate RSV *vaccine* question (bare "RSV" with no "ตรวจ" nearby).
+  it("routes a blood-draw/lab-test question to LAB_TEST_INQUIRY", async () => {
+    const r = await detectIntent("อยากสอบถามเรื่องเจาะเลือดตรวจค่ะ ต้องทำยังไงบ้าง");
+    expect(r.intent).toBe("LAB_TEST_INQUIRY");
+  });
+
+  it("routes a 'ตรวจ RSV' question to LAB_TEST_INQUIRY", async () => {
+    const r = await detectIntent("อยากตรวจ RSV ให้น้องค่ะ");
+    expect(r.intent).toBe("LAB_TEST_INQUIRY");
+  });
+
+  it("still routes a plain bare-RSV vaccine question into the vaccine gate, not LAB_TEST_INQUIRY", async () => {
+    const r = await detectIntent("RSV ราคาเท่าไหร่คะ");
+    expect(r.intent).not.toBe("LAB_TEST_INQUIRY");
+  });
+
+  // Priority 4, ภาพ 2 ซ้าย verbatim: asking about medicine (not the vaccine) for a
+  // disease that also happens to be a vaccine name.
+  it("routes the ภาพ 2 ซ้าย verbatim medicine question to PRODUCT_STOCK_INQUIRY, not a vaccine price", async () => {
+    const r = await detectIntent("มียาไข้หวัดใหญ่ไหม");
+    expect(r.intent).toBe("PRODUCT_STOCK_INQUIRY");
+  });
+
+  // Priority 4, ภาพ 4 ซ้าย verbatim: "อยู่ตรงไหน" phrasing (not the bare "อยู่ไหน" already covered).
+  it("routes the ภาพ 4 ซ้าย verbatim location question to LOCATION", async () => {
+    const r = await detectIntent("คลีนิคอยู่ตรงไหนคะ");
+    expect(r.intent).toBe("LOCATION");
+  });
+
+  // Priority 4, ภาพ 6 ซ้าย (illustrative — exact screenshot wording unavailable): a
+  // facility-policy question about sick/well zones must not be misread as the
+  // parent reporting their own child's illness.
+  it("does not treat a sick/well-zone policy question as MEDICAL_QUESTION", async () => {
+    const r = await detectIntent("คลินิกแบ่งโซนเด็กป่วยกับไม่ป่วยยังไงคะ");
+    expect(r.intent).not.toBe("MEDICAL_QUESTION");
+  });
+
+  // Regression: a real personal symptom report must still route correctly.
+  it("still routes a real symptom report ('ลูกป่วยมีไข้') to MEDICAL_QUESTION", async () => {
+    const r = await detectIntent("ลูกป่วยมีไข้ค่ะ");
+    expect(r.intent).toBe("MEDICAL_QUESTION");
+  });
+
+  // ภาพ 7 ขวา verbatim: traced against real production data — the "penta" alias and
+  // "ราคา" price keyword both already resolve correctly at the intent-routing layer
+  // (see vaccine.test.ts for the actual root cause, which is a missing vaccine_rules
+  // row, not a routing bug). This locks in that no keyword collision (NEXT_DOSE,
+  // DOSE_COUNT_COMPARISON, apptChange's bare "นัด", MEDICAL_QUESTION, etc.) steals this
+  // message at the routing layer — resolveVaccineGroup is mocked to return no group
+  // here (no real DB in this test file), so this only proves the routing side, not the
+  // DB-dependent group resolution itself.
+  it("routes the ภาพ 7 ขวา verbatim message to a vaccine-price intent with ageMonths=4, no keyword collision", async () => {
+    const r = await detectIntent("ขอสอบถามราคาวัคซีน Penta เข็มที่ 2 สำหรับเด็ก4 เดือน ค่ะ ราคาเข็มละเท่าไหร่คะ");
+    expect(r.intent).toBe("VACCINE_PRICE");
+    expect(r.ageMonths).toBe(4);
+  });
+});

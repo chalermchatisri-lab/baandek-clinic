@@ -17,6 +17,10 @@ export type Intent =
   | "VACCINE_PACKAGE"
   | "VACCINE_GENERAL_INFO"
   | "VACCINE_DELAY"
+  | "VACCINE_NEXT_DOSE"
+  | "VACCINE_DOSE_COUNT_QUESTION"
+  | "ANIMAL_BITE"
+  | "LAB_TEST_INQUIRY"
   | "MEDICAL_QUESTION"
   | "PRODUCT_STOCK_INQUIRY"
   | "SERVICES"
@@ -34,7 +38,12 @@ export interface IntentResult {
   text: string;
   vaccineGroup?: string;   // resolved from vaccine_aliases when relevant
   ageMonths?: number | null;
-  specificDay?: number;    // 1-31, set only for CLINIC_STATUS_SPECIFIC_DATE
+  specificDay?: number;    // 1-31, set only for CLINIC_STATUS_SPECIFIC_DATE (bare "วันที่ N", no month)
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 2) ***: ISO yyyy-mm-dd already fully resolved —
+  // set instead of specificDay when the date came from an explicit day+month (+ optional
+  // year) or a bare weekday name embedded in a free-form sentence (ดู extractExplicitDate/
+  // extractBareWeekdayDate ด้านล่าง) reply.ts ใช้ค่านี้ตรงๆ แทนการ roll-forward แบบ specificDay
+  resolvedDate?: string;
 }
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -49,7 +58,10 @@ const KW = {
   // เปิด/ปิด/หยุด กับ ไหม เช่น "เปิดปกติใช่ไหมคะ" (เจอจริง — ตกไป FALLBACK ทั้งที่ตอบได้)
   // ดู STATUS_QUESTION_PATTERN ด้านล่างไฟล์ — เป็น regex เสริม ไม่ได้แทนที่ literal list นี้
   time: ["เวลาทำการ", "เวลาเปิด", "กี่โมง", "ตารางเวลา"],
-  location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
+  // *** แก้ 2026-09-29 (round 4, Priority 4) ***: เคสจริง "คลีนิคอยู่ตรงไหนคะ" ไม่ match
+  // "อยู่ไหน" เดิมเพราะมีคำว่า "ตรง" แทรกอยู่ระหว่าง "อยู่" กับ "ไหน" ("อยู่ตรงไหน" ไม่ใช่
+  // substring ของ "อยู่ไหน") ตกไป fallback ทั้งที่ควรตอบที่อยู่คลินิก — เพิ่ม literal phrase นี้
+  location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "อยู่ตรงไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
   // "Check my appointment" — MUST be tested before apptChange (see detectIntent).
   // The booking-menu quick-reply button sends exactly "เช็คนัดหมาย", which contains
   // both "เช็คนัด" and "นัด"; those used to live in apptChange, so the button
@@ -141,7 +153,49 @@ const KW = {
   // (ดู detectIntent) เพื่อให้คำถามจริงที่มี "ขอบคุณ" นำหน้าแต่ตามด้วยคำถามจริงๆ (เช่น
   // "ขอบคุณค่ะ แล้วขอถามราคาวัคซีนหน่อยค่ะ") ยังโดน KW.price ดักตอบก่อนอยู่ดี ไม่ใช่ END_CONVERSATION
   thanks: ["ขอบคุณ", "ขอบใจ", "thank you", "thanks"],
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 1 — medical safety) ***: เคสจริง "มีวัคซีนแมวช่วนไหม"
+  // (พิมพ์ตก น่าจะหมายถึง "โดนแมวข่วน") เดิมบอทตีความเป็นคำถามวัคซีนทั่วไป (เพราะมีคำว่า
+  // "มีวัคซีน" ซึ่งตรงกับ KW.avail พอดี) โชว์การ์ดเลือกอายุ ทั้งที่เป็นเหตุฉุกเฉินทางการแพทย์จริง
+  // ต้องเช็คก่อนทุก intent อื่นเสมอ (ดู detectIntent) รวม "ช่วน" เป็น typo ของ "ข่วน" ไว้ด้วยตรงๆ
+  // เพราะเป็นคำที่เจอจริงจากภาพหน้าจอ ไม่ใช่การเดา
+  animalBite: [
+    "โดนกัด", "หมากัด", "แมวกัด", "สัตว์กัด", "ถูกกัด",
+    "โดนข่วน", "แมวข่วน", "หมาข่วน", "สัตว์ข่วน", "ถูกข่วน",
+    "แมวช่วน", "หมาช่วน", "สัตว์ช่วน",
+    "พิษสุนัขบ้า", "หมาบ้า",
+  ],
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 8-9) ***: คำถามเรื่องตรวจแล็บ (RSV/เจาะเลือด)
+  // ตกไป fallback เพราะไม่มี keyword ไหนจับเลย — "เจาะเลือด"/"ตรวจเลือด" เป็น full-phrase ปลอดภัย
+  // (ไม่ชนคำอื่น) ส่วน RSV ไม่ใส่เป็น bare token เพราะ "RSV" เป็นทั้งชื่อวัคซีน (ดู vaccine.ts
+  // GROUP_DISPLAY_NAME) และชื่อสินค้าใน stock.ts (nirsevimab ฯลฯ) อยู่แล้ว — ต้องเช็คคู่กับคำว่า
+  // "ตรวจ" เท่านั้น (ดู LAB_TEST_PATTERN ด้านล่าง) ไม่งั้นคำถามราคา/สต็อก RSV ตามปกติจะโดนแย่งไป
+  labTest: ["เจาะเลือด", "ตรวจเลือด", "ตรวจภูมิ"],
 };
+
+const LAB_TEST_PATTERN = /(ตรวจ\s*rsv|rsv\s*ตรวจ)/i;
+
+// *** เพิ่ม 2026-09-29 (round 4, Priority 4) ***: เคสจริง "มียาไข้หวัดใหญ่ไหม" (ถามยา ไม่ใช่
+// วัคซีน) — KW.productStock เดิมต้อง exact-phrase เต็ม ("มียาไหม" ฯลฯ) ไม่ match เพราะมีชื่อโรค
+// แทรกอยู่ระหว่าง "มียา" กับ "ไหม" ตกไปจน resolveVaccineGroup() เจอ "ไข้หวัดใหญ่" เป็น
+// vaccine_aliases (ชื่อโรคเดียวกับชื่อวัคซีน) แล้วดึงไปตอบราคาวัคซีนแทนที่จะตอบเรื่องยา —
+// เพิ่ม pattern กว้างขึ้น "มียา...ไหม/มั้ย/หรือเปล่า/รึเปล่า" (มีอะไรคั่นกลางได้) เช็คคู่กับ
+// KW.productStock เดิมในจุดเดียวกัน (ก่อน resolveVaccineGroup เสมออยู่แล้ว)
+const MEDICINE_AVAIL_PATTERN = /มียา.{0,20}(ไหม|มั้ย|หรือเปล่า|รึเปล่า)/;
+
+// *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 5 ขวา) ***: เคสจริง "อยากให้นัดวัคซีนตัวต่อไป
+// ต้องไปฉีดเมื่อไหร่" — มีคำว่า "นัด" ปนอยู่ ("นัดวัคซีนตัวต่อไป") โดน apptChange's bare "นัด"
+// ดักไปตอบเนื้อหาเลื่อนนัดทั่วไป ทั้งที่คำถามจริงคือ "วัคซีนตัวต่อไปต้องฉีดเมื่อไหร่" (ถามกำหนด
+// เข็มถัดไป ไม่ใช่ขอเลื่อนนัด) — ต้องเช็คก่อน apptChange เสมอ (ดู detectIntent)
+const NEXT_DOSE_QUESTION_PATTERN =
+  /(ตัวต่อไป|เข็มต่อไป|ครั้งต่อไป|ตัวถัดไป|เข็มถัดไป).*(เมื่อไหร่|เมื่อไร|กี่โมง|วันไหน|วันอะไร)/;
+
+// *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 1) ***: เคสจริง "แบบ2เข็มกับเข็มเดียวต่างกันไม่
+// คะ" (ถามต่อเนื่องจากคำถามราคาวัคซีนไข้หวัดใหญ่ก่อนหน้า) — ไม่มีคำว่า "วัคซีน"/"ฉีด" หรือชื่อ
+// วัคซีนใดๆ อยู่ในข้อความนี้เองเลย ระบบไม่มี conversation memory ข้ามข้อความ (out of MVP scope
+// ตอนนี้) จึงตอบเจาะจงวัคซีนที่ถามไปก่อนหน้าไม่ได้ — แต่ตอบกว้างๆ อย่างปลอดภัยได้โดยไม่ต้อง
+// hardcode ข้อมูลจำนวนเข็มต่อวัคซีน (ขัด Iron Rule "data over code") ดีกว่าปล่อยตกไป fallback
+// ทั่วไปที่ไม่เกี่ยวข้องเลย
+const DOSE_COUNT_COMPARISON_PATTERN = /(\d+\s*เข็ม|เข็มเดียว).*(ต่างกัน|แตกต่าง|เหมือนกัน)/;
 
 // "ค่ะ"/"ครับ"/"คะ" เดี่ยวๆ (ทั้งข้อความมีแค่นี้) — ต้อง exact match เท่านั้น ห้าม substring
 // เด็ดขาด เพราะเป็นคำลงท้ายประโยคที่พบในเกือบทุกข้อความภาษาไทย ถ้าเช็คแบบ includes() จะจับ
@@ -217,8 +271,13 @@ function isVaccineDelayQuestion(text: string): boolean {
 // (vaccine gate, apptChange ฯลฯ) ตัดสินแทน ไม่ใช่ตัดจบที่นี่ก่อนเลย
 const SPECIFIC_DATE_DISTRACTOR_PATTERN = /วัคซีน|ฉีด|สมุด|กี่วัน|ล่าช้า/;
 
+// *** แก้ 2026-09-29 (round 4, Priority 3, ภาพ 5 ซ้าย) ***: เคสจริง "วันนี้เข้าไปฉีด 1 ขวบครึ่ง
+// ได้ไหม" — เดิม parser ไม่รู้จัก "ครึ่ง" เลย ("1 ขวบครึ่ง" อ่านได้แค่ "1 ขวบ" = 12 เดือน ตกหล่น
+// 6 เดือนของ "ครึ่ง" ไป) เช็คก่อน y/m เสมอเพื่อจับ "X ปี/ขวบครึ่ง" เป็นกรณีพิเศษ (+6 เดือน) แทน
 export function parseAgeMonths(text: string): number | null {
   const t = norm(text);
+  const half = t.match(/(\d+)\s*(?:ปี|ขวบ)\s*ครึ่ง/);
+  if (half) return +half[1]! * 12 + 6;
   const y = t.match(/(\d+)\s*(?:ปี|ขวบ)/);
   const m = t.match(/(\d+)\s*เดือน/);
   if (y || m) return (y ? +y[1]! * 12 : 0) + (m ? +m[1]! : 0);
@@ -269,6 +328,66 @@ const THAI_MONTH_TOKENS =
   /(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.|มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/;
 const THAI_WEEKDAY_TOKENS = /(วันจันทร์|วันอังคาร|วันพุธ|วันพฤหัส|วันศุกร์|วันเสาร์|วันอาทิตย์)/;
 
+// *** เพิ่ม 2026-09-29 (round 4, Priority 2) ***: เคสจริง "วันอาทิตย์ที่ 27 ก.ย.69 เปิดช่วงเย็น
+// ไหม" และ "วันอาทิตย์เปิดมั้ย" — เดิมทั้งคู่ตกไป CLINIC_DATE_UNCLEAR (ขอให้พิมพ์ใหม่เป็น
+// "วันที่ 12" เท่านั้น) ทั้งที่วันที่/ชื่อวันฝังอยู่ในประโยคชัดเจนอยู่แล้ว ควร parse ตรงๆ ได้เลย
+// ไม่ต้องให้ผู้ใช้พิมพ์ใหม่ — สองฟังก์ชันด้านล่าง resolve เป็น ISO date ตรงๆ (ไม่ใช่แค่ day-of-
+// month แบบ extractSpecificDayOfMonth เดิม) reply.ts ใช้ผลลัพธ์นี้ผ่าน IntentResult.resolvedDate
+// เรียก getClinicStatus() ตรงได้เลยเหมือน CLINIC_STATUS_SPECIFIC_DATE เดิมทุกประการ
+const THAI_MONTH_INDEX: Record<string, number> = {
+  "ม.ค.": 0, "มกราคม": 0, "ก.พ.": 1, "กุมภาพันธ์": 1, "มี.ค.": 2, "มีนาคม": 2,
+  "เม.ย.": 3, "เมษายน": 3, "พ.ค.": 4, "พฤษภาคม": 4, "มิ.ย.": 5, "มิถุนายน": 5,
+  "ก.ค.": 6, "กรกฎาคม": 6, "ส.ค.": 7, "สิงหาคม": 7, "ก.ย.": 8, "กันยายน": 8,
+  "ต.ค.": 9, "ตุลาคม": 9, "พ.ย.": 10, "พฤศจิกายน": 10, "ธ.ค.": 11, "ธันวาคม": 11,
+};
+
+const EXPLICIT_DATE_PATTERN =
+  /(\d{1,2})\s*(ม\.ค\.|ก\.พ\.|มี\.ค\.|เม\.ย\.|พ\.ค\.|มิ\.ย\.|ก\.ค\.|ส\.ค\.|ก\.ย\.|ต\.ค\.|พ\.ย\.|ธ\.ค\.|มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)\s*(\d{2,4})?/;
+
+/** "27 ก.ย.69" / "27 ก.ย. 2569" (ฝังอยู่ตรงไหนของประโยคก็ได้) -> ISO date ตรงๆ ไม่ผ่าน
+ *  roll-forward logic แบบ resolveUpcomingDateByDayOfMonth เพราะมีเดือน(+ปี)ระบุชัดแล้ว ไม่กำกวม
+ *  — ปีย่อ 2 หลัก ("69") ตีเป็น พ.ศ. เสมอ (25xx) แปลงเป็น ค.ศ. โดยลบ 543; ไม่ระบุปี -> ใช้ปีปัจจุบัน */
+function extractExplicitDate(text: string, bangkokNow: Date): string | null {
+  const m = text.match(EXPLICIT_DATE_PATTERN);
+  if (!m) return null;
+  const day = Number(m[1]);
+  if (day < 1 || day > 31) return null;
+  const monthIdx = THAI_MONTH_INDEX[m[2]!];
+  if (monthIdx == null) return null;
+  let yearCE = bangkokNow.getUTCFullYear();
+  if (m[3]) {
+    let y = Number(m[3]);
+    if (y < 100) y += 2500; // ปีย่อ 2 หลัก พ.ศ. เช่น "69" -> 2569
+    yearCE = y - 543;
+  }
+  const d = new Date(Date.UTC(yearCE, monthIdx, day));
+  if (d.getUTCMonth() !== monthIdx || d.getUTCDate() !== day) return null; // วันที่ไม่มีจริง เช่น 30 ก.พ.
+  return d.toISOString().slice(0, 10);
+}
+
+const THAI_WEEKDAY_TO_DOW: Record<string, number> = {
+  "วันอาทิตย์": 0, "วันจันทร์": 1, "วันอังคาร": 2, "วันพุธ": 3,
+  "วันพฤหัส": 4, "วันศุกร์": 5, "วันเสาร์": 6,
+};
+
+/** ชื่อวันลอยๆ ไม่มีวันที่/เดือนกำกับ (เช่น "วันอาทิตย์เปิดมั้ย") -> resolve เป็นวันที่ที่ใกล้
+ *  ที่สุด (นับวันนี้ด้วยถ้าตรง) เหมือน resolveUpcomingDateByDayOfMonth แต่นับวันในสัปดาห์แทน
+ *  day-of-month — ต้องมีคำเปิด/ปิด/หยุด เท่านั้น (กฎเดิมของ isClinicDateUnclear) กันชนกับคำถาม
+ *  ตารางเวลาทั่วไปอย่าง "เวลาทำการวันจันทร์" (ควรเป็น CLINIC_TIME ไม่ใช่คำถามวันที่เจาะจง) */
+function extractBareWeekdayDate(text: string, bangkokNow: Date): string | null {
+  if (extractSpecificDayOfMonth(text) !== null) return null;
+  if (THAI_MONTH_TOKENS.test(text)) return null; // มีเดือนด้วย -> ให้ extractExplicitDate จัดการแทน
+  const m = text.match(THAI_WEEKDAY_TOKENS);
+  if (!m) return null;
+  if (!/(เปิด|ปิด|หยุด)/.test(text)) return null;
+  const targetDow = THAI_WEEKDAY_TO_DOW[m[0]];
+  if (targetDow == null) return null;
+  const y = bangkokNow.getUTCFullYear(), mo = bangkokNow.getUTCMonth(), d = bangkokNow.getUTCDate();
+  const today = new Date(Date.UTC(y, mo, d));
+  const diff = (targetDow - today.getUTCDay() + 7) % 7;
+  return new Date(today.getTime() + diff * 86400000).toISOString().slice(0, 10);
+}
+
 // A weekday/month name said WITHOUT the "วันที่ N" format above (e.g.
 // "วันอังคารเปิดไหม", "วันพุธที่ 12 ส.ค. เปิดมั้ย") — these used to fall through to
 // the generic KW.status match below and get answered with *today's* status
@@ -296,12 +415,20 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   // BARE_ACKNOWLEDGEMENT ด้านบนสำหรับเหตุผลที่ต้อง exact match ไม่ใช่ substring)
   if (BARE_ACKNOWLEDGEMENT.has(text)) return { intent: "END_CONVERSATION", text };
 
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 1 — medical safety) ***: เช็คก่อนทุก intent อื่น
+  // เสมอ — ดูคอมเมนต์ที่ KW.animalBite ด้านบน ห้ามให้คำว่า "มีวัคซีน"/"บริการ"/ฯลฯ ที่อาจปนอยู่
+  // ในประโยคเดียวกันแย่งไปตอบผิดทางได้เด็ดขาด เพราะเป็นเหตุฉุกเฉินทางการแพทย์จริง
+  if (has(text, KW.animalBite)) return { intent: "ANIMAL_BITE", text };
+
   if (has(text, KW.booking))    return { intent: "BOOKING_MENU", text };
   // apptCheck before apptChange: "เช็คนัดหมาย" (the booking-menu button payload)
   // contains "นัด", which apptChange also matches — order decides the winner.
   if (has(text, KW.apptCheck))  return { intent: "APPOINTMENT_CHECK", text };
   // apptConfirm before apptChange too — same reasoning (ดูคอมเมนต์ที่ KW.apptConfirm ด้านบน)
   if (has(text, KW.apptConfirm)) return { intent: "APPOINTMENT_CONFIRM", text };
+  // เช็คก่อน apptChange เสมอ — ดูคอมเมนต์ที่ NEXT_DOSE_QUESTION_PATTERN ด้านบน "นัดวัคซีนตัวต่อไป"
+  // มีคำว่า "นัด" ปนอยู่ ต้องไม่ให้ apptChange's bare "นัด" แย่งไปตอบเลื่อนนัดทั่วไป
+  if (NEXT_DOSE_QUESTION_PATTERN.test(text)) return { intent: "VACCINE_NEXT_DOSE", text };
   if (has(text, KW.apptChange)) return { intent: "APPOINTMENT_CHANGE", text };
 
   // Checked before extractSpecificDayOfMonth() below — a "delay/how many days late
@@ -323,6 +450,21 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (specificDay !== null && !SPECIFIC_DATE_DISTRACTOR_PATTERN.test(text)) {
     return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, specificDay };
   }
+
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 2) ***: ลองแปลง "วันที่ + เดือน (+ปี)" หรือ "ชื่อวัน"
+  // ที่ฝังอยู่ในประโยคให้เป็นวันที่จริงก่อนเสมอ — ดูคอมเมนต์ที่ extractExplicitDate/
+  // extractBareWeekdayDate ด้านบน กันไม่ให้ตกไป CLINIC_DATE_UNCLEAR (ขอให้พิมพ์ใหม่) ทั้งที่
+  // resolve ได้เองอยู่แล้ว
+  const bangkokNow = new Date(Date.now() + 7 * 3600 * 1000);
+  const explicitDate = extractExplicitDate(text, bangkokNow);
+  if (explicitDate) {
+    return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, resolvedDate: explicitDate };
+  }
+  const weekdayDate = extractBareWeekdayDate(text, bangkokNow);
+  if (weekdayDate) {
+    return { intent: "CLINIC_STATUS_SPECIFIC_DATE", text, resolvedDate: weekdayDate };
+  }
+
   if (isClinicDateUnclear(text)) {
     return { intent: "CLINIC_DATE_UNCLEAR", text };
   }
@@ -345,17 +487,33 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.news))       return { intent: "NEWS", text };
   if (has(text, KW.contact))    return { intent: "CONTACT", text };
 
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 8-9) ***: เช็คก่อน symptom/vaccine gate เสมอ
+  // — ดูคอมเมนต์ที่ KW.labTest/LAB_TEST_PATTERN ด้านบน
+  if (has(text, KW.labTest) || LAB_TEST_PATTERN.test(text)) return { intent: "LAB_TEST_INQUIRY", text };
+
   // Checked before resolveVaccineGroup() on purpose: a symptom sentence naming a
   // disease that also happens to be a vaccine_aliases entry (e.g. "มือเท้าปาก")
   // must not be swallowed by the vaccine-question path below. TEMPERATURE_READING
   // checked in the same slot — a bare "38 องศา" is medical context on its own even
   // with zero KW.symptom words nearby (see TEMPERATURE_READING comment above).
-  if (has(text, KW.symptom) || hasBareFeverWord(text) || TEMPERATURE_READING.test(text))
+  // *** แก้ 2026-09-29 (round 4, Priority 4) ***: เคสจริง "แบ่งโซนเด็กป่วย/ไม่ป่วยยังไงคะ" —
+  // คำถามเรื่องนโยบายแบ่งโซนของคลินิก ไม่ใช่การรายงานอาการของลูกตัวเอง แต่โดน bare "ป่วย"
+  // ใน KW.symptom ดักไปตอบ MEDICAL_QUESTION ผิดทาง — "โซน" เป็นคำเฉพาะเจาะจงพอที่จะกันชน
+  // (ไม่ปรากฏในบริบทอาการป่วยทั่วไป) ยกเว้นไว้ ปล่อยตกไป fallback ให้เจ้าหน้าที่ตอบเองแทน
+  // (ยืนยันจาก Yai ว่าไม่ต้องการคำตอบอัตโนมัติสำหรับคำถามนี้ แค่ต้องไม่ใช่ MEDICAL_QUESTION)
+  if ((has(text, KW.symptom) || hasBareFeverWord(text) || TEMPERATURE_READING.test(text)) && !text.includes("โซน"))
     return { intent: "MEDICAL_QUESTION", text };
-  if (has(text, KW.productStock)) return { intent: "PRODUCT_STOCK_INQUIRY", text };
+  // *** แก้ 2026-09-29 (round 4, Priority 4) ***: ดูคอมเมนต์ที่ MEDICINE_AVAIL_PATTERN ด้านบน
+  if (has(text, KW.productStock) || MEDICINE_AVAIL_PATTERN.test(text))
+    return { intent: "PRODUCT_STOCK_INQUIRY", text };
 
   // เช็คก่อน resolveVaccineGroup()/vaccine gate เสมอ — ดูคอมเมนต์ที่ KW.vaccinePackage ด้านบน
   if (has(text, KW.vaccinePackage)) return { intent: "VACCINE_PACKAGE", text };
+
+  // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 1) ***: ดูคอมเมนต์ที่ DOSE_COUNT_COMPARISON_PATTERN
+  // ด้านบน — เช็คก่อน vaccine gate เสมอ (ข้อความนี้เองไม่มีคำว่าวัคซีน/ฉีดเลย ไปไม่ถึง gate ด้านล่าง
+  // อยู่แล้ว แต่เช็คเป็นจุดเดียวกับ vaccinePackage เพื่อความชัดเจนของลำดับ)
+  if (DOSE_COUNT_COMPARISON_PATTERN.test(text)) return { intent: "VACCINE_DOSE_COUNT_QUESTION", text };
 
   const group = await resolveVaccineGroup(text);
   const ageMonths = parseAgeMonths(text);
@@ -366,7 +524,13 @@ export async function detectIntent(message: string): Promise<IntentResult> {
     return { intent: "VACCINE_GENERAL_INFO", text };
   }
 
-  if (group || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน")) {
+  // *** แก้ 2026-09-29 (round 4, Priority 3, ภาพ 5 ซ้าย) ***: เคสจริง "วันนี้เข้าไปฉีด 1 ขวบครึ่ง
+  // ได้ไหม" — ไม่มีคำว่า "วัคซีน" เลย มีแค่ "ฉีด" ซึ่งเดิม gate นี้เช็คแค่ text.includes("วัคซีน")
+  // เท่านั้น (ไม่รวม "ฉีด" ทั้งที่จุดอื่นในไฟล์เดียวกัน เช่น VACCINE_HOWTO_PATTERN/
+  // isVaccineDelayQuestion ถือว่า "ฉีด" เป็นสัญญาณบริบทวัคซีนอยู่แล้ว) ทำให้ข้อความนี้ไม่เข้า
+  // gate เลย ตกไป fallback ทั้งที่มีทั้งอายุ (ผ่าน parseAgeMonths ครึ่งปีที่แก้ด้านบนแล้ว) และ
+  // คำว่า "ฉีด" ชัดเจน
+  if (group || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน") || text.includes("ฉีด")) {
     if (has(text, KW.price)) return { intent: "VACCINE_PRICE", text, vaccineGroup: group, ageMonths };
     if (has(text, KW.avail)) return { intent: "VACCINE_AVAILABILITY", text, vaccineGroup: group, ageMonths };
     // Falls here for "วัคซีน" + age with no specific product/price/avail word
