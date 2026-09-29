@@ -295,8 +295,29 @@ export function parseAgeMonths(text: string): number | null {
 // เหมือนกัน (line.ts/messenger.ts) จบที่ reply()/send() ไม่ถูกเรียกเลย = ผู้ปกครองไม่ได้รับ
 // คำตอบอะไรทั้งสิ้น นี่คือสาเหตุที่เป็นไปได้มากที่สุดของเคสเงียบจริงบน Messenger — ครอบ
 // try/catch ให้ล้มแบบปลอดภัย (คืน undefined เหมือนไม่พบ group) แทนที่จะปล่อยให้พังทั้งสาย
+// *** เพิ่ม 2026-09-29 (round 4, ภาพ 5 ซ้าย — live-test fail) ***: เคสจริงบน FB Messenger —
+// "น้องพราฉีดวัคซีนไข้หวัดใหญ่19/4/69 วันนี้จะเข้าไปฉีดวัคซีน 1 ขวบครึ่งได้ไหมค่ะ" บอทตอบราคา/
+// รายละเอียดวัคซีนไข้หวัดใหญ่ (ชื่อวัคซีนที่ปรากฏก่อนในประโยค บอกว่าฉีดไปแล้วพร้อมวันที่กำกับ)
+// แทนที่จะตอบคำถามจริงท้ายประโยค (วัคซีน 1 ขวบครึ่ง) — resolveVaccineGroup() เดิมหา alias แบบ
+// substring match ทั่วทั้งข้อความ ไม่สนใจตำแหน่ง/บริบทเลย ทำให้ "ไข้หวัดใหญ่" ในประโยคบอกเล่า
+// อดีต (ซึ่งเป็น alias เดียวที่ match ได้ในข้อความนี้) ถูกดึงไปใช้ ทั้งที่ประโยคคำถามจริงท้าย
+// ประโยคไม่ได้เอ่ยชื่อวัคซีนเจาะจงเลย (แค่บอกอายุ) — ตัดข้อความส่วนที่อยู่ก่อนวันที่รูปแบบ
+// DD/MM/YY(YY) ออกก่อนหา alias เสมอ ถ้ามีคำว่า "ฉีด" นำหน้าวันที่นั้นด้วย (สัญญาณว่าเป็นการ
+// บันทึกว่าฉีดไปแล้ว ไม่ใช่คำถาม) — จงใจใช้ pattern แคบ (ต้องเป็นวันที่แบบเลขคั่นด้วย "/" เท่านั้น
+// ไม่ใช่ "วันที่ N"/เดือนย่อภาษาไทยที่ extractSpecificDayOfMonth/extractExplicitDate จัดการอยู่
+// แล้วคนละจุด) กันไม่ให้กระทบข้อความอื่นที่ไม่มีรูปแบบวันที่นี้เลย
+const PAST_VACCINATION_DATE_PATTERN = /\d{1,2}\/\d{1,2}\/\d{2,4}/;
+
+export function stripPastVaccinationMention(text: string): string {
+  const m = text.match(PAST_VACCINATION_DATE_PATTERN);
+  if (!m || m.index == null) return text;
+  const before = text.slice(0, m.index);
+  if (!before.includes("ฉีด")) return text; // ไม่มี "ฉีด" นำหน้าวันที่ — อาจไม่ใช่บริบทฉีดไปแล้ว ไม่ตัดอะไรออกเผื่อพลาด
+  return text.slice(m.index + m[0].length);
+}
+
 async function resolveVaccineGroup(text: string): Promise<string | undefined> {
-  const t = norm(text);
+  const t = norm(stripPastVaccinationMention(text));
   try {
     const { data } = await admin.from("vaccine_aliases").select("alias, group_code");
     if (!data) return undefined;

@@ -42,6 +42,24 @@
       mechanism). Yai ran the `DTP_POLIO_COMBO_ALL_AGES` insert (git history
       has the exact SQL); live-tested — TETRA/PENTA/HEXA now correctly answer
       ฿1,400 / ฿1,600 / ฿1,900 instead of DOCTOR_REFERRAL.
+- [ ] Fix pushed, **not yet live-tested** (round 4, ภาพ 5 ซ้าย — 1st live-test
+      failed): verbatim "น้องพราฉีดวัคซีนไข้หวัดใหญ่19/4/69 วันนี้จะเข้าไปฉีด
+      วัคซีน 1 ขวบครึ่งได้ไหมค่ะ" answered with flu-vaccine info instead of the
+      1.5-year age-group vaccine list actually asked about. Root cause:
+      `resolveVaccineGroup()` does a plain substring scan across the *whole*
+      message with zero positional awareness — the past-tense, date-stamped
+      "already vaccinated" clause ("ฉีดวัคซีนไข้หวัดใหญ่19/4/69") was the only
+      alias match in the text, so it won even though the real question at the
+      end names no specific vaccine. Added `stripPastVaccinationMention()`:
+      when a DD/MM/YY-style date is preceded by "ฉีด", the alias search runs
+      only on the text *after* that date. Deliberately narrow pattern (only
+      slash-formatted dates, only when "ฉีด" precedes) to avoid touching the
+      Thai-month-token date handling already done elsewhere. Covered by a
+      pure-function unit test (`intent.test.ts`) plus a new
+      `intent.vaccineAliasContext.test.ts` that mocks a realistic alias row to
+      exercise `resolveVaccineGroup()` end-to-end (the shared `intent.test.ts`
+      mock always returns an empty alias table, so it can't catch this class
+      of bug on its own). Needs a live-test before this can be closed.
 - [ ] Follow-up (round 4, ภาพ 8 ขวา + 9, partial): added LAB_TEST_INQUIRY for
       "เจาะเลือด"/"ตรวจเลือด"/"ตรวจภูมิ"/"ตรวจ RSV" from the paraphrase — the
       "ยืนยันเวลาเปิด" (confirm opening hours) part of the same report wasn't

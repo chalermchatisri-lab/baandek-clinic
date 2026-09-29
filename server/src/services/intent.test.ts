@@ -11,7 +11,7 @@ vi.mock("../lib/env", () => ({
   env: { geminiKey: "", geminiModel: "" },
 }));
 
-const { detectIntent } = await import("./intent");
+const { detectIntent, stripPastVaccinationMention } = await import("./intent");
 
 describe("detectIntent — round 2 bug fixes", () => {
   // Issue 5: "ขี้ตา" used to fall through to the general-menu fallback instead of
@@ -257,5 +257,30 @@ describe("detectIntent — round 4 bug fixes", () => {
     const r = await detectIntent("ขอสอบถามราคาวัคซีน Penta เข็มที่ 2 สำหรับเด็ก4 เดือน ค่ะ ราคาเข็มละเท่าไหร่คะ");
     expect(r.intent).toBe("VACCINE_PRICE");
     expect(r.ageMonths).toBe(4);
+  });
+
+  // ภาพ 5 ซ้าย verbatim (live-test fail): a past-tense, date-stamped "already
+  // vaccinated" mention was winning over the real question at the end of the
+  // sentence, because resolveVaccineGroup() does a plain substring scan with no
+  // positional awareness — see the full explanation on stripPastVaccinationMention
+  // in intent.ts. These test the pure helper directly (no DB needed); the
+  // end-to-end alias-resolution behavior is covered separately in
+  // intent.vaccineAliasContext.test.ts, which mocks realistic alias rows.
+  it("strips text up to and including a DD/MM/YY date when 'ฉีด' precedes it (past-vaccination record)", () => {
+    const stripped = stripPastVaccinationMention(
+      "น้องพราฉีดวัคซีนไข้หวัดใหญ่19/4/69 วันนี้จะเข้าไปฉีดวัคซีน 1 ขวบครึ่งได้ไหมค่ะ",
+    );
+    expect(stripped.trim()).toBe("วันนี้จะเข้าไปฉีดวัคซีน 1 ขวบครึ่งได้ไหมค่ะ");
+    expect(stripped).not.toContain("ไข้หวัดใหญ่");
+  });
+
+  it("leaves text unchanged when a date is present but 'ฉีด' does not precede it", () => {
+    const text = "นัดหมอวันที่ 19/4/69 ค่ะ วัคซีนไข้หวัดใหญ่ราคาเท่าไหร่คะ";
+    expect(stripPastVaccinationMention(text)).toBe(text);
+  });
+
+  it("leaves text unchanged when there is no DD/MM/YY-style date at all", () => {
+    const text = "วัคซีนไข้หวัดใหญ่ราคาเท่าไรคะ";
+    expect(stripPastVaccinationMention(text)).toBe(text);
   });
 });
