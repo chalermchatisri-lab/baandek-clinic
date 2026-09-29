@@ -60,11 +60,32 @@
       exercise `resolveVaccineGroup()` end-to-end (the shared `intent.test.ts`
       mock always returns an empty alias table, so it can't catch this class
       of bug on its own). Needs a live-test before this can be closed.
-- [ ] Follow-up (round 4, ภาพ 8 ขวา + 9, partial): added LAB_TEST_INQUIRY for
-      "เจาะเลือด"/"ตรวจเลือด"/"ตรวจภูมิ"/"ตรวจ RSV" from the paraphrase — the
-      "ยืนยันเวลาเปิด" (confirm opening hours) part of the same report wasn't
-      addressed since it's already covered by CLINIC_STATUS/CLINIC_TIME and
-      the exact failing phrasing is unknown; needs verbatim text to root-cause.
+- [ ] Fix pushed, **not yet live-tested** (round 4, ภาพ 8-9 — 1st live-test
+      failed, fixed in 2 parts): LAB_TEST_INQUIRY wasn't firing for real
+      wording. **Not an ordering bug** — LAB_TEST_INQUIRY is checked well
+      before MEDICAL_QUESTION unconditionally, confirmed by re-reading the
+      live file. The real cause: `LAB_TEST_PATTERN` required "ตรวจ" and "RSV"
+      to sit *directly* adjacent (whitespace only) — real phrasing like
+      "ตรวจหาเชื้อ RSV"/"ตรวจว่ามี RSV" has a word in between and never
+      matched, so it fell through to a genuine symptom-word match instead
+      (parents naturally describe symptoms in the same message). Widened to
+      tolerate up to ~15 Thai chars/spaces between the two words.
+      Separately, Yai confirmed the clinic tests RSV/COVID-19/influenza by
+      nasal swab only — **no blood-draw service at all** — so the old reply
+      ("please ask staff directly") was a needless deflection for something
+      answerable outright. Rewrote it as a direct factual statement (what's
+      tested, the method, and that blood draws aren't offered), still without
+      inventing a price (none exists in `services`/`clinic_config` — asks the
+      customer to call for that instead of guessing). Checked whether this
+      belonged in the `services` table first (Iron Rule "data over code") —
+      that table's 3 rows are broad category cards for a different display,
+      not wired into this reply path, so treated this as a clinic-policy
+      fact hardcoded the same way DOCTOR_REFERRAL/APPOINTMENT_CHANGE already
+      are, not a data gap.
+      Still open from the original report and unaddressed: the "ยืนยันเวลา
+      เปิด" (confirm opening hours) part — already covered by CLINIC_STATUS/
+      CLINIC_TIME in principle, exact failing phrasing unknown; needs
+      verbatim text to root-cause if it's still failing live.
 
 ## 🚧 Phase 3 — Dashboard (React)
 - [ ] Auth (Supabase)

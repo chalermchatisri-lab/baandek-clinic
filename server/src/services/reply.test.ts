@@ -116,10 +116,11 @@ describe("buildReplyMessages — round 4 new intents render without throwing", (
     expect(combined).toContain("ระบุชื่อวัคซีนที่สอบถาม");
   });
 
-  it("LAB_TEST_INQUIRY renders the staff-contact deflection", async () => {
+  it("LAB_TEST_INQUIRY renders the factual swab-test answer, not a staff-contact deflection", async () => {
     const msgs = await buildReplyMessages("อยากตรวจ RSV ให้น้องค่ะ", "line", "u4");
     const combined = msgs.map((m) => (m.type === "text" ? m.text : "")).join("\n");
-    expect(combined).toContain("ตรวจแล็บ");
+    expect(combined).toContain("Swab จมูก");
+    expect(combined).toContain("ไม่มีบริการเจาะเลือด");
   });
 
   it("CLINIC_STATUS_SPECIFIC_DATE with a resolvedDate (weekday parsed from a sentence) renders the status text", async () => {

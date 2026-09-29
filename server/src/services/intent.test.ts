@@ -218,6 +218,23 @@ describe("detectIntent — round 4 bug fixes", () => {
     expect(r.intent).not.toBe("LAB_TEST_INQUIRY");
   });
 
+  // Live-test fail: the original LAB_TEST_PATTERN required "ตรวจ" and "RSV" to sit
+  // directly next to each other (whitespace only) — real questions almost always
+  // have a word in between ("ตรวจหาเชื้อ", "ตรวจว่ามี"), and parents naturally
+  // describe symptoms in the same sentence as the reason for asking, which used to
+  // let MEDICAL_QUESTION win once the (too-strict) LAB_TEST_PATTERN failed to match
+  // — NOT an ordering bug (LAB_TEST_INQUIRY is checked well before MEDICAL_QUESTION
+  // unconditionally), purely a pattern-strictness one.
+  it("routes 'ตรวจหาเชื้อ RSV' (a word between ตรวจ and RSV) to LAB_TEST_INQUIRY, not MEDICAL_QUESTION, even with symptom words present", async () => {
+    const r = await detectIntent("ลูกไอมีเสมหะ มีน้ำมูก อยากตรวจหาเชื้อ RSV ให้ลูกด้วยค่ะ");
+    expect(r.intent).toBe("LAB_TEST_INQUIRY");
+  });
+
+  it("routes 'ตรวจว่ามี RSV ไหม' to LAB_TEST_INQUIRY", async () => {
+    const r = await detectIntent("อยากตรวจว่ามี RSV ไหมคะ");
+    expect(r.intent).toBe("LAB_TEST_INQUIRY");
+  });
+
   // Priority 4, ภาพ 2 ซ้าย verbatim: asking about medicine (not the vaccine) for a
   // disease that also happens to be a vaccine name.
   it("routes the ภาพ 2 ซ้าย verbatim medicine question to PRODUCT_STOCK_INQUIRY, not a vaccine price", async () => {
