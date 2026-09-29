@@ -36,43 +36,12 @@
       (Messenger settings → Webhooks → subscribed fields). Without it, echo
       events never reach this code and the mute never engages — code alone
       cannot verify this is on; check it before relying on this fix live.
-- [ ] **DB fix needed (round 4, ภาพ 7 ขวา — root-caused, NOT a code bug)**:
-      verbatim "ขอสอบถามราคาวัคซีน Penta เข็มที่ 2 สำหรับเด็ก4 เดือน ค่ะ
-      ราคาเข็มละเท่าไหร่คะ" → DOCTOR_REFERRAL instead of a price. Traced
-      against the live production DB directly: alias "penta" already resolves
-      to group_code=DTP_POLIO_COMBO correctly, "ราคา" keyword matches fine,
-      ageMonths=4 parses fine (confirmed via intent.test.ts + a direct SQL
-      trace) — the real cause is that **`vaccine_rules` has zero ACTIVE rows
-      for vaccine_group='DTP_POLIO_COMBO'**, even though `vaccines` already
-      has TETRA (฿1,400) / PENTA (฿1,600) / HEXA (฿1,900) all ACTIVE with real
-      prices. `buildVaccineAdvice()` returns status "no_rules" before it ever
-      reads those prices (see `vaccine.test.ts`, which locks in this exact
-      mechanism). Not something `Penta`-alias-specific or "เข็มที่ 2"-specific
-      at all — any price question for this group hits the same gap.
-      **Fix is a DB insert, not a code change** — attempted it directly via
-      the Supabase MCP but it was blocked by the auto-mode permission
-      classifier as a shared-resource write (correct call for a live
-      production DB). Yai needs to run this herself (Supabase SQL editor),
-      mirroring the exact pattern already live for the PCV group (multiple
-      same-age products → one no-age-restriction rule with a placeholder
-      product_code that deliberately doesn't match any real product_code, so
-      buildVaccineAdvice lists every product's own price instead of guessing
-      one age/dose eligibility window we don't have clinic confirmation for):
-      ```sql
-      insert into vaccine_rules
-        (rule_id, vaccine_group, product_code, min_age_months, max_age_months,
-         primary_doses, interval_days, status, display_message, sort_order)
-      values (
-        'DTP_POLIO_COMBO_ALL_AGES', 'DTP_POLIO_COMBO', 'DTP_POLIO_COMBO',
-        null, null, null, null, 'ACTIVE',
-        'ราคาต่อเข็ม แนะนำให้ปรึกษาแพทย์เรื่องช่วงอายุและจำนวนเข็มที่เหมาะสมสำหรับน้อง',
-        40
-      );
-      ```
-      Once run, this should make any TETRA/PENTA/HEXA price question show all
-      three prices as options rather than DOCTOR_REFERRAL — verified against
-      `vaccine.test.ts`'s mocked version of this exact row shape, but needs a
-      live-test after the real insert to confirm end-to-end.
+- [x] **DB fix (round 4, ภาพ 7 ขวา) — DONE, live-tested ✅**: root cause was
+      `vaccine_rules` having zero ACTIVE rows for `DTP_POLIO_COMBO` (not an
+      alias or "เข็มที่ 2" bug — see `vaccine.test.ts` for the locked-in
+      mechanism). Yai ran the `DTP_POLIO_COMBO_ALL_AGES` insert (git history
+      has the exact SQL); live-tested — TETRA/PENTA/HEXA now correctly answer
+      ฿1,400 / ฿1,600 / ฿1,900 instead of DOCTOR_REFERRAL.
 - [ ] Follow-up (round 4, ภาพ 8 ขวา + 9, partial): added LAB_TEST_INQUIRY for
       "เจาะเลือด"/"ตรวจเลือด"/"ตรวจภูมิ"/"ตรวจ RSV" from the paraphrase — the
       "ยืนยันเวลาเปิด" (confirm opening hours) part of the same report wasn't
