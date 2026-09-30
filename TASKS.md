@@ -24,68 +24,58 @@
 - [ ] Gemini fallback for UNKNOWN intent
 - [ ] Messenger webhook parity
 - [ ] Retire Cloudflare Worker
-- [x] Human-handoff mute for Messenger (round 4, ภาพ 10 — built after 2nd
-      real incident): `lib/humanHandoff.ts` + wired into `routes/messenger.ts`.
-      Detects a staff member typing manually in Page Inbox via `message_echoes`
-      (is_echo with no matching app_id) and suppresses ALL bot auto-replies to
-      that PSID for 30 min (TTL re-arms on every further staff message). The
-      bot's own Send API echoes (which carry app_id) are ignored, not treated
-      as staff activity.
-      **⚠️ Still needs one manual step outside this repo**: enable the
-      `message_echoes` webhook field for this app in the Meta App Dashboard
-      (Messenger settings → Webhooks → subscribed fields). Without it, echo
-      events never reach this code and the mute never engages — code alone
-      cannot verify this is on; check it before relying on this fix live.
-- [x] **DB fix (round 4, ภาพ 7 ขวา) — DONE, live-tested ✅**: root cause was
-      `vaccine_rules` having zero ACTIVE rows for `DTP_POLIO_COMBO` (not an
-      alias or "เข็มที่ 2" bug — see `vaccine.test.ts` for the locked-in
-      mechanism). Yai ran the `DTP_POLIO_COMBO_ALL_AGES` insert (git history
-      has the exact SQL); live-tested — TETRA/PENTA/HEXA now correctly answer
-      ฿1,400 / ฿1,600 / ฿1,900 instead of DOCTOR_REFERRAL.
-- [ ] Fix pushed, **not yet live-tested** (round 4, ภาพ 5 ซ้าย — 1st live-test
-      failed): verbatim "น้องพราฉีดวัคซีนไข้หวัดใหญ่19/4/69 วันนี้จะเข้าไปฉีด
-      วัคซีน 1 ขวบครึ่งได้ไหมค่ะ" answered with flu-vaccine info instead of the
-      1.5-year age-group vaccine list actually asked about. Root cause:
-      `resolveVaccineGroup()` does a plain substring scan across the *whole*
-      message with zero positional awareness — the past-tense, date-stamped
-      "already vaccinated" clause ("ฉีดวัคซีนไข้หวัดใหญ่19/4/69") was the only
-      alias match in the text, so it won even though the real question at the
-      end names no specific vaccine. Added `stripPastVaccinationMention()`:
-      when a DD/MM/YY-style date is preceded by "ฉีด", the alias search runs
-      only on the text *after* that date. Deliberately narrow pattern (only
-      slash-formatted dates, only when "ฉีด" precedes) to avoid touching the
-      Thai-month-token date handling already done elsewhere. Covered by a
-      pure-function unit test (`intent.test.ts`) plus a new
-      `intent.vaccineAliasContext.test.ts` that mocks a realistic alias row to
-      exercise `resolveVaccineGroup()` end-to-end (the shared `intent.test.ts`
-      mock always returns an empty alias table, so it can't catch this class
-      of bug on its own). Needs a live-test before this can be closed.
-- [ ] Fix pushed, **not yet live-tested** (round 4, ภาพ 8-9 — 1st live-test
-      failed, fixed in 2 parts): LAB_TEST_INQUIRY wasn't firing for real
-      wording. **Not an ordering bug** — LAB_TEST_INQUIRY is checked well
-      before MEDICAL_QUESTION unconditionally, confirmed by re-reading the
-      live file. The real cause: `LAB_TEST_PATTERN` required "ตรวจ" and "RSV"
-      to sit *directly* adjacent (whitespace only) — real phrasing like
-      "ตรวจหาเชื้อ RSV"/"ตรวจว่ามี RSV" has a word in between and never
-      matched, so it fell through to a genuine symptom-word match instead
-      (parents naturally describe symptoms in the same message). Widened to
-      tolerate up to ~15 Thai chars/spaces between the two words.
-      Separately, Yai confirmed the clinic tests RSV/COVID-19/influenza by
-      nasal swab only — **no blood-draw service at all** — so the old reply
-      ("please ask staff directly") was a needless deflection for something
-      answerable outright. Rewrote it as a direct factual statement (what's
-      tested, the method, and that blood draws aren't offered), still without
-      inventing a price (none exists in `services`/`clinic_config` — asks the
-      customer to call for that instead of guessing). Checked whether this
-      belonged in the `services` table first (Iron Rule "data over code") —
-      that table's 3 rows are broad category cards for a different display,
-      not wired into this reply path, so treated this as a clinic-policy
-      fact hardcoded the same way DOCTOR_REFERRAL/APPOINTMENT_CHANGE already
-      are, not a data gap.
-      Still open from the original report and unaddressed: the "ยืนยันเวลา
-      เปิด" (confirm opening hours) part — already covered by CLINIC_STATUS/
-      CLINIC_TIME in principle, exact failing phrasing unknown; needs
-      verbatim text to root-cause if it's still failing live.
+- [x] **Round 4 — CLOSED (29 ก.ย. 2569, live-tested end to end)**:
+      Priority 1 (animal-bite safety intent), Priority 2 (embedded date/weekday
+      parsing), Priority 3 ภาพ 5 ซ้าย/ขวา (`stripPastVaccinationMention()` +
+      next-dose question), Priority 3 ภาพ 8-9 (LAB_TEST_INQUIRY, pattern
+      widened + rewritten as a factual swab-test answer), Priority 4 (4/4:
+      medicine-vs-vaccine, "อยู่ตรงไหน", sick-zone policy question, Penta DB
+      fix) — all live-tested and passing. Priority 3 ภาพ 1 (follow-up dose-
+      count question) intentionally left as a generic deflection, not a full
+      fix — Yai accepted this; true fix needs cross-message memory (see
+      backlog below).
+      Human-handoff mute (`lib/humanHandoff.ts`): `message_echoes` enabled in
+      the Meta App Dashboard (29 ก.ย., 20:47) — feature is active, but
+      **could not be verified by a staged test** (Yai and Aey are both Page
+      admins; Facebook doesn't deliver echo webhooks for an admin's own
+      messages — same lesson as the round-2 "จองคิว" test). Needs verification
+      from the next real event where a non-admin staff member replies
+      manually — check Render logs for the mute firing, don't stage it.
+- [ ] Backlog: **cross-message context memory** — a follow-up question with no
+      vaccine name of its own (e.g. round 4 ภาพ 1: "แบบ2เข็มกับเข็มเดียวต่าง
+      กันไม่คะ" right after asking about flu vaccine pricing) can't be answered
+      specifically without remembering the prior message. Same shape of state
+      as `symptomContext.ts`/`humanHandoff.ts` (in-memory TTL map) but scoped
+      to "last vaccine group discussed" per user. Deliberately out of scope for
+      rounds 4-5; a real feature for its own round, not a quick fix.
+- [ ] Fix pushed, **not yet live-tested** (round 5, 30 ก.ย. 2569): 2 cases.
+      **เคส 1**: verbatim "ขอโลเคชั่น คลินิคหน่อยค่า" fell to fallback — the
+      transliterated loanword "โลเคชั่น" was missing from the location keyword
+      list (round 4 added "อยู่ตรงไหน" but not this). Added.
+      **เคส 2 (medical safety)**: two real back-to-back messages. (1) "น้องเพิ่ง
+      หายจาก rsv" (purely a statement — no question, no price word at all) was
+      answered with RSV vaccine pricing — same bug class as round 4's ภาพ 5
+      ซ้าย (plain substring alias matching with no narrative-context
+      awareness), but for an illness-recovery clause instead of an
+      already-vaccinated one. Added `stripIllnessRecoveryMention()`, a sibling
+      to `stripPastVaccinationMention()` — deliberately scoped to Latin-letter
+      disease codes only (not Thai script), because Thai text often has no
+      spaces between clauses and a broader match risked eating a real vaccine
+      name mentioned later in the same message; locked in by a test that
+      checks exactly that. With nothing else in the message actionable, it now
+      correctly falls through to the safe generic fallback instead of a
+      confidently wrong price.
+      (2) "ต้องเว้นวัคซีนหรือไปฉีดได้ตามปกติคะ" (asking how long to wait after
+      illness before vaccinating) fell to the generic age-picker menu — it has
+      "วัคซีน"/"ฉีด" but no vaccine name or age, so it hit the vaccine gate's
+      empty-info fallback. **Per Yai's explicit medical-safety requirement,
+      the bot must never assert a specific number of days** — this needed the
+      same "defer to a doctor" answer already used for vaccine-delay
+      questions, not a new number to invent. Reused `isVaccineDelayQuestion()`
+      → `VACCINE_DELAY` → the existing `DOCTOR_REFERRAL` text (added "เว้น
+      วัคซีน"/"พักวัคซีน"/etc. as additional delay markers) rather than adding
+      a parallel intent with a duplicate answer.
+      73 tests pass, typecheck clean. Needs a live-test before this can be closed.
 
 ## 🚧 Phase 3 — Dashboard (React)
 - [ ] Auth (Supabase)

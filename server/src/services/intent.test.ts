@@ -11,7 +11,7 @@ vi.mock("../lib/env", () => ({
   env: { geminiKey: "", geminiModel: "" },
 }));
 
-const { detectIntent, stripPastVaccinationMention } = await import("./intent");
+const { detectIntent, stripPastVaccinationMention, stripIllnessRecoveryMention } = await import("./intent");
 
 describe("detectIntent — round 2 bug fixes", () => {
   // Issue 5: "ขี้ตา" used to fall through to the general-menu fallback instead of
@@ -299,5 +299,48 @@ describe("detectIntent — round 4 bug fixes", () => {
   it("leaves text unchanged when there is no DD/MM/YY-style date at all", () => {
     const text = "วัคซีนไข้หวัดใหญ่ราคาเท่าไรคะ";
     expect(stripPastVaccinationMention(text)).toBe(text);
+  });
+});
+
+describe("detectIntent — round 5 bug fixes", () => {
+  // เคส 1 verbatim: "โลเคชั่น" (the transliterated loanword) was missing from the
+  // location keyword list — only "อยู่ไหน"/"อยู่ตรงไหน" existed (round 4).
+  it("routes the เคส 1 verbatim 'โลเคชั่น' question to LOCATION", async () => {
+    const r = await detectIntent("ขอโลเคชั่น คลินิคหน่อยค่า");
+    expect(r.intent).toBe("LOCATION");
+  });
+
+  // เคส 2 verbatim (2nd message): "ต้องเว้นวัคซีนหรือไปฉีดได้ตามปกติคะ" — a post-illness
+  // vaccination-timing question. Medical safety: must NEVER assert a specific number of
+  // days — must defer to a doctor, same as VACCINE_DELAY's existing DOCTOR_REFERRAL answer.
+  it("routes the เคส 2 verbatim post-illness timing question to VACCINE_DELAY (medical safety — defers to a doctor, asserts no day count)", async () => {
+    const r = await detectIntent("ต้องเว้นวัคซีนหรือไปฉีดได้ตามปกติคะ");
+    expect(r.intent).toBe("VACCINE_DELAY");
+  });
+
+  // stripIllnessRecoveryMention() pure-function tests — the actual mechanism behind
+  // เคส 2's 1st message (น้องเพิ่งหายจาก rsv). End-to-end alias-resolution behavior
+  // (that "rsv" no longer resolves vaccineGroup) is covered in
+  // intent.vaccineAliasContext.test.ts, which mocks a realistic alias row.
+  it("strips a Latin-letter disease code immediately following 'เพิ่งหายจาก'", () => {
+    expect(stripIllnessRecoveryMention("น้องเพิ่งหายจาก rsv").trim()).toBe("น้อง");
+  });
+
+  it("strips a Latin-letter disease code immediately following 'หายจาก'", () => {
+    expect(stripIllnessRecoveryMention("น้องหายจาก covid มาค่ะ")).not.toContain("covid");
+  });
+
+  it("does not touch a Thai vaccine name later in the same message (only strips the word immediately after the marker)", () => {
+    // Deliberately scoped to Latin letters only (see the comment on
+    // ILLNESS_RECOVERY_PATTERN in intent.ts) — this locks in that scoping so a
+    // future broadening doesn't accidentally eat a real vaccine name elsewhere
+    // in the sentence, since Thai text often has no spaces between clauses.
+    const text = "น้องหายจากไข้แล้ว อยากฉีดวัคซีนไข้หวัดใหญ่ค่ะ";
+    expect(stripIllnessRecoveryMention(text)).toContain("วัคซีนไข้หวัดใหญ่");
+  });
+
+  it("leaves text unchanged when there is no illness-recovery marker at all", () => {
+    const text = "วัคซีน RSV ราคาเท่าไหร่คะ";
+    expect(stripIllnessRecoveryMention(text)).toBe(text);
   });
 });

@@ -11,7 +11,10 @@ vi.mock("../lib/supabase", () => ({
   admin: {
     from: () => ({
       select: () => Promise.resolve({
-        data: [{ alias: "ไข้หวัดใหญ่", group_code: "INFLUENZA" }],
+        data: [
+          { alias: "ไข้หวัดใหญ่", group_code: "INFLUENZA" },
+          { alias: "rsv", group_code: "RSV" },
+        ],
       }),
     }),
   },
@@ -45,5 +48,24 @@ describe("detectIntent — vaccine-alias context (round 4, ภาพ 5 ซ้า
   it("still resolves vaccineGroup when a date is present but not part of a 'ฉีด...date' record", async () => {
     const r = await detectIntent("เมื่อวันที่ 19/4/69 มีเหตุการณ์อื่น วัคซีนไข้หวัดใหญ่ราคาเท่าไหร่คะ");
     expect(r.vaccineGroup).toBe("INFLUENZA");
+  });
+});
+
+describe("detectIntent — vaccine-alias context (round 5, เคส 2, live verbatim)", () => {
+  // "น้องเพิ่งหายจาก rsv" — a pure statement (no question, no price/avail word at all),
+  // used to resolve vaccineGroup="RSV" via the same class of bug as ภาพ 5 ซ้าย (plain
+  // substring alias matching with no narrative-context awareness) and confidently show
+  // RSV vaccine pricing. Now must not resolve to RSV group at all — it should fall
+  // through with nothing else actionable in the message, landing on the safe generic
+  // fallback rather than a confidently wrong answer.
+  it("does not resolve vaccineGroup for an illness-recovery statement mentioning a disease name", async () => {
+    const r = await detectIntent("น้องเพิ่งหายจาก rsv");
+    expect(r.vaccineGroup).not.toBe("RSV");
+  });
+
+  // Regression: a genuine RSV vaccine price question must still resolve normally.
+  it("still resolves vaccineGroup normally for a plain RSV vaccine price question", async () => {
+    const r = await detectIntent("วัคซีน RSV ราคาเท่าไหร่คะ");
+    expect(r.vaccineGroup).toBe("RSV");
   });
 });

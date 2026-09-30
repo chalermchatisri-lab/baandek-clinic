@@ -61,7 +61,9 @@ const KW = {
   // *** แก้ 2026-09-29 (round 4, Priority 4) ***: เคสจริง "คลีนิคอยู่ตรงไหนคะ" ไม่ match
   // "อยู่ไหน" เดิมเพราะมีคำว่า "ตรง" แทรกอยู่ระหว่าง "อยู่" กับ "ไหน" ("อยู่ตรงไหน" ไม่ใช่
   // substring ของ "อยู่ไหน") ตกไป fallback ทั้งที่ควรตอบที่อยู่คลินิก — เพิ่ม literal phrase นี้
-  location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "อยู่ตรงไหน", "ไปยังไง", "พิกัด", "การเดินทาง"],
+  // *** แก้ 2026-09-30 (round 5, เคส 1) ***: เคสจริง "ขอโลเคชั่น คลินิคหน่อยค่า" — คำทับศัพท์
+  // "โลเคชั่น" (location) ไม่อยู่ในลิสต์เลย ตกไป fallback ทั้งที่เป็นคำถามที่อยู่ตรงๆ
+  location: ["ที่อยู่", "แผนที่", "อยู่ไหน", "อยู่ตรงไหน", "ไปยังไง", "พิกัด", "การเดินทาง", "โลเคชั่น"],
   // "Check my appointment" — MUST be tested before apptChange (see detectIntent).
   // The booking-menu quick-reply button sends exactly "เช็คนัดหมาย", which contains
   // both "เช็คนัด" and "นัด"; those used to live in apptChange, so the button
@@ -264,10 +266,17 @@ const VACCINE_HOWTO_PATTERN = /ทำ(ยังไง|ไง|อย่างไ�
 // ขวบ" ที่ตามด้วยคำถามเรื่องล่าช้า/เลื่อน ก็ถือเป็นบริบทวัคซีนได้เองโดยไม่ต้องเอ่ยชื่อ ("ครบ" =
 // อายุถึงกำหนดฉีดตามเกณฑ์ ไม่ใช่คำทั่วไปที่จะไปชนบริบทอื่น) เพิ่มเป็นสัญญาณสำรองแทนการบังคับ
 // ต้องมีคำว่าวัคซีน/ฉีดเป๊ะๆ
+// *** แก้ 2026-09-30 (round 5, เคส 2 — medical safety) ***: เคสจริงบน FB Messenger — ถามต่อ
+// จาก "น้องเพิ่งหายจาก rsv" ว่า "ต้องเว้นวัคซีนหรือไปฉีดได้ตามปกติคะ" (ถามว่าต้องเว้นระยะกี่วัน
+// หลังหายป่วยก่อนฉีดวัคซีนได้) — เดิมข้อความนี้มีคำว่า "วัคซีน"/"ฉีด" ทำให้เข้า vaccine gate
+// ด้านล่าง แต่ไม่มีชื่อวัคซีน/อายุระบุเลย จึงตกไปที่การ์ดเลือกอายุทั่วไป (ไม่ตอบคำถามจริง) —
+// ระยะเวลาที่ต้องเว้นวัคซีนหลังป่วยเป็นเรื่องที่แพทย์ต้องประเมินเป็นรายบุคคล **ห้ามให้บอทฟันธง
+// จำนวนวันเอง** เด็ดขาด (Yai ยืนยันชัดเจน) — ใช้ DOCTOR_REFERRAL เดิมเหมือนคำถามเรื่องล่าช้า/
+// เลื่อนฉีด (ตอบเดียวกันเพราะเป็นคำถาม "ช่วงเวลา/ระยะห่างการฉีด" แบบเดียวกัน ไม่ใช่ intent ใหม่)
 function isVaccineDelayQuestion(text: string): boolean {
   const mentionsVaccine =
     text.includes("วัคซีน") || text.includes("ฉีด") || /ครบ\s*\d+\s*(เดือน|ปี|ขวบ)/.test(text);
-  const mentionsDelay = /ล่าช้า|เลื่อนฉีด|เลื่อนวัคซีน|ช้ากว่ากำหนด/.test(text) ||
+  const mentionsDelay = /ล่าช้า|เลื่อนฉีด|เลื่อนวัคซีน|ช้ากว่ากำหนด|เว้นวัคซีน|พักวัคซีน|เว้นระยะฉีด|หยุดฉีดวัคซีน/.test(text) ||
     (text.includes("เลื่อน") && text.includes("กี่วัน"));
   return mentionsVaccine && mentionsDelay;
 }
@@ -325,8 +334,28 @@ export function stripPastVaccinationMention(text: string): string {
   return text.slice(m.index + m[0].length);
 }
 
+// *** เพิ่ม 2026-09-30 (round 5, เคส 2) ***: เคสจริงบน FB Messenger — "น้องเพิ่งหายจาก rsv"
+// (แค่บอกอาการ/ประวัติ ไม่ได้ถามราคาเลย) บอทตอบราคาวัคซีน RSV ผิดที่ — สาเหตุเดียวกับ
+// stripPastVaccinationMention() ด้านบน (resolveVaccineGroup() หา alias แบบ substring ทั่ว
+// ข้อความ ไม่สนใจบริบท) แต่เป็นรูปประโยคคนละแบบ: "หายจาก X" (เพิ่งหายป่วย) แทนที่จะเป็น
+// "ฉีด X วันที่..." (ฉีดวัคซีนไปแล้ว) — ตัดคำที่ตามหลัง "หายจาก"/"เพิ่งหาย"/"เพิ่งเป็น" ออกก่อน
+// หา alias เสมอ
+//
+// *** จงใจจำกัดแค่ตัวอักษรละติน (a-z) เท่านั้น ไม่รวมตัวอักษรไทย *** — ต่างจาก
+// stripPastVaccinationMention ที่ตัดทั้งข้อความก่อน/หลังจุดคงที่ (วันที่) ได้อย่างปลอดภัย ฟังก์ชัน
+// นี้ต้องตัดแค่ "คำที่ตามหลัง marker ทันที" เท่านั้น แต่ภาษาไทยมักเขียนติดกันไม่มีวรรค (เช่น
+// "หายจากไข้แล้ว อยากฉีดวัคซีนไข้หวัดใหญ่ค่ะ") ถ้าจับตัวอักษรไทยด้วยจะไล่กินยาวเกินจนไปกินชื่อ
+// วัคซีนตัวจริงที่ถามถึงทีหลังในประโยคเดียวกันโดยไม่ตั้งใจ — เคสจริงที่เจอ ("rsv") เป็นอักษร
+// ละตินอยู่แล้วพอดี จึงจำกัดแค่นี้ก่อน ถ้าเจอเคสจริงที่เป็นชื่อโรคภาษาไทยติดกับ marker ค่อยขยาย
+// ทีหลังพร้อมตัวอย่างข้อความจริงมายืนยัน ไม่เดาข้อบัญญัติภาษาไทยแบบกว้างๆ ตอนนี้
+const ILLNESS_RECOVERY_PATTERN = /(?:เพิ่งหายจาก|หายจาก|เพิ่งหาย|เพิ่งเป็น)\s*[a-zA-Z]+/g;
+
+export function stripIllnessRecoveryMention(text: string): string {
+  return text.replace(ILLNESS_RECOVERY_PATTERN, " ");
+}
+
 async function resolveVaccineGroup(text: string): Promise<string | undefined> {
-  const t = norm(stripPastVaccinationMention(text));
+  const t = norm(stripIllnessRecoveryMention(stripPastVaccinationMention(text)));
   try {
     const { data } = await admin.from("vaccine_aliases").select("alias, group_code");
     if (!data) return undefined;
