@@ -344,3 +344,15 @@ describe("detectIntent — round 5 bug fixes", () => {
     expect(stripIllnessRecoveryMention(text)).toBe(text);
   });
 });
+
+describe("detectIntent — review request (2026-10-07)", () => {
+  it.each(["รีวิว", "ขอลิงก์รีวิวค่ะ", "อยากรีวิวคลินิกค่ะ"])("routes '%s' to REVIEW_REQUEST", async (m) => {
+    expect((await detectIntent(m)).intent).toBe("REVIEW_REQUEST");
+  });
+  it("does not hijack vaccine questions that mention 'รีวิว'", async () => {
+    expect((await detectIntent("รีวิววัคซีนไอพีวีหน่อยค่ะ")).intent).not.toBe("REVIEW_REQUEST");
+  });
+  it("does not hijack booking", async () => {
+    expect((await detectIntent("จองคิวค่ะ")).intent).toBe("BOOKING_MENU");
+  });
+});

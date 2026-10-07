@@ -30,6 +30,7 @@ export type Intent =
   | "VACCINE_NEWS"
   | "CLOSURE_ANNOUNCEMENT"
   | "CONTACT"
+  | "REVIEW_REQUEST"
   | "BOOKING_MENU"
   | "UNKNOWN";
 
@@ -92,6 +93,9 @@ const KW = {
   closureAnnounce: ["ประกาศปิดคลินิก"],
   contact: ["ติดต่อ", "เบอร์โทร", "เบอร์", "โทรศัพท์", "ไลน์ไอดี"],
   booking: ["จองคิว", "จอง", "นัดคิว"],
+  // *** เพิ่ม 2026-10-07 ***: ผู้ปกครองพิมพ์ "รีวิว" → ตอบการ์ดปุ่ม "เขียนรีวิว" (ลิงก์ Google Maps)
+  // เป็นข้อความตอบกลับ (reply API) จึงไม่กินโควตา push 300 ข้อความ/เดือน
+  review: ["รีวิว"],
   // *** เพิ่ม 2026-09-06 (round 2, issue 2) ***: คลินิกไม่มีแพ็กเกจวัคซีนรวม — เช็คก่อน
   // generic price/วัคซีน gate ด้านล่างเสมอ ไม่งั้น "แพ็กเกจวัคซีนราคาเท่าไหร่" จะโดน
   // KW.price + "วัคซีน" ดักไปตอบการ์ดเลือกอายุ (ไม่มี group ให้ resolve) ซึ่งไม่ตรงคำถาม
@@ -545,6 +549,10 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   if (has(text, KW.holidays))   return { intent: "HOLIDAYS", text };
   if (has(text, KW.news))       return { intent: "NEWS", text };
   if (has(text, KW.contact))    return { intent: "CONTACT", text };
+  // ถ้ามีคำวัคซีน/ฉีดปนอยู่ (เช่น "รีวิววัคซีน X ดีไหม") ปล่อยผ่านให้ gate เจาะจงกว่าตัดสิน
+  // ไม่ให้การ์ดขอรีวิวไปแย่งตอบคำถามสุขภาพ
+  if (has(text, KW.review) && !(text.includes("วัคซีน") || text.includes("ฉีด")))
+    return { intent: "REVIEW_REQUEST", text };
 
   // *** เพิ่ม 2026-09-29 (round 4, Priority 3, ภาพ 8-9) ***: เช็คก่อน symptom/vaccine gate เสมอ
   // — ดูคอมเมนต์ที่ KW.labTest/LAB_TEST_PATTERN ด้านบน

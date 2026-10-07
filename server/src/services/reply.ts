@@ -18,7 +18,7 @@ const MENU_HERO_BASE = `${env.supabaseUrl}/storage/v1/object/public/menu-hero`;
 type FlexButton = { label: string; uri?: string; text?: string }; // uri = เปิดลิงก์/โทร, text = ส่งข้อความ (quick-reply แบบเดิม)
 function buildSimpleFlexCard(opts: {
   title: string;
-  heroUrl: string;
+  heroUrl?: string; // *** แก้ 2026-10-07 ***: optional — การ์ดขอรีวิวยังไม่มีรูป hero
   bodyLines: string[];
   buttons?: FlexButton[]; // *** แก้ 2026-09-03 ***: เดิมรับปุ่มเดียว — ปุ่มที่ 2 (เช่น "เช็คนัดหมาย",
   // "Facebook") เคยใช้ quickReply ลอยแยกจากการ์ด ทำให้ดูหลุดออกมาไม่ติดกัน (feedback จาก Yai)
@@ -27,7 +27,7 @@ function buildSimpleFlexCard(opts: {
 }): FlexMessage {
   const contents: Record<string, unknown> = {
     type: "bubble",
-    hero: { type: "image", url: opts.heroUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" },
+    ...(opts.heroUrl ? { hero: { type: "image", url: opts.heroUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" } } : {}),
     body: {
       type: "box",
       layout: "vertical",
@@ -1013,6 +1013,30 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
           heroUrl: `${MENU_HERO_BASE}/menu_hero_contact.png`,
           bodyLines,
           buttons,
+          altText: text,
+        })];
+      }
+      return [{ type: "text", text }];
+    }
+    case "REVIEW_REQUEST": {
+      // ลิงก์อ่านจาก clinic_config.GOOGLE_REVIEW_URL ก่อน (Iron Rule 2: data over code) — ถ้ายังไม่ได้ตั้ง
+      // ใช้ลิงก์ที่ตรวจแล้ว (g.page/r/.../review จาก Google Business Profile > Get more reviews)
+      const reviewUrl = (await config("GOOGLE_REVIEW_URL")) ?? "https://g.page/r/Ccivqc_bJiVfEBM/review";
+      const note = "ต้องเข้าสู่ระบบบัญชี Google ก่อนเขียนรีวิวนะคะ (ถ้าเปิดในไลน์แล้วเจอหน้าล็อกอิน ให้กดเปิดในเบราว์เซอร์/Chrome/Safari)";
+      const text =
+        "💙 ขอบคุณที่ไว้วางใจคลินิกบ้านเด็กค่ะ\n" +
+        "ถ้าพอใจในบริการ ช่วยเขียนรีวิวให้เราได้ที่ลิงก์นี้ค่ะ\n" +
+        `${reviewUrl}\n\n${note}\n` +
+        "เพื่อความเป็นส่วนตัว ขอความกรุณาไม่ระบุชื่อ-นามสกุลหรือข้อมูลสุขภาพของลูกในรีวิวนะคะ 🙏";
+      if (channel === "line") {
+        return [buildSimpleFlexCard({
+          title: "💙 ช่วยรีวิวคลินิกบ้านเด็กหน่อยนะคะ",
+          bodyLines: [
+            "ขอบคุณที่ไว้วางใจเราค่ะ ความเห็นของคุณช่วยให้ครอบครัวอื่นตัดสินใจได้ง่ายขึ้น",
+            note,
+            "โปรดไม่ระบุชื่อ-นามสกุลหรือข้อมูลสุขภาพของลูกในรีวิวนะคะ",
+          ],
+          buttons: [{ label: "⭐ เขียนรีวิว", uri: reviewUrl }],
           altText: text,
         })];
       }
