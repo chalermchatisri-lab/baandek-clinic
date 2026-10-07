@@ -129,3 +129,20 @@ describe("buildReplyMessages — round 4 new intents render without throwing", (
     expect(combined).toContain("คลินิกเปิดค่ะ");
   });
 });
+
+describe("buildReplyMessages — REVIEW_REQUEST (2026-10-07)", () => {
+  it("LINE card button opens the review link in the external browser", async () => {
+    const msgs = await buildReplyMessages("รีวิว", "line", "u-review");
+    const json = JSON.stringify(msgs[0]);
+    expect(json).toContain('"uri":"https://g.page/r/Ccivqc_bJiVfEBM/review?openExternalBrowser=1"');
+    // altText keeps the plain link — only the button URI gets the param
+    expect(json.match(/openExternalBrowser=1/g)).toHaveLength(1);
+  });
+
+  it("Messenger text keeps the plain review link", async () => {
+    const msgs = await buildReplyMessages("รีวิว", "messenger", "fb-review");
+    const combined = msgs.map((m) => (m.type === "text" ? m.text : "")).join("\n");
+    expect(combined).toContain("https://g.page/r/Ccivqc_bJiVfEBM/review");
+    expect(combined).not.toContain("openExternalBrowser");
+  });
+});

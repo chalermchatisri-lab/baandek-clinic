@@ -1029,6 +1029,9 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
         `${reviewUrl}\n\n${note}\n` +
         "เพื่อความเป็นส่วนตัว ขอความกรุณาไม่ระบุชื่อ-นามสกุลหรือข้อมูลสุขภาพของลูกในรีวิวนะคะ 🙏";
       if (channel === "line") {
+        // *** แก้ 2026-10-07 ***: ปุ่มบนการ์ด LINE เปิดลิงก์ในเบราว์เซอร์ภายนอก (openExternalBrowser=1)
+        // — in-app browser ของไลน์ไม่มี session Google จึงเจอหน้าล็อกอิน; Messenger/altText ใช้ลิงก์เดิม
+        const lineReviewUrl = `${reviewUrl}${reviewUrl.includes("?") ? "&" : "?"}openExternalBrowser=1`;
         return [buildSimpleFlexCard({
           title: "💙 ช่วยรีวิวคลินิกบ้านเด็กหน่อยนะคะ",
           bodyLines: [
@@ -1036,7 +1039,7 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
             note,
             "โปรดไม่ระบุชื่อ-นามสกุลหรือข้อมูลสุขภาพของลูกในรีวิวนะคะ",
           ],
-          buttons: [{ label: "⭐ เขียนรีวิว", uri: reviewUrl }],
+          buttons: [{ label: "⭐ เขียนรีวิว", uri: lineReviewUrl }],
           altText: text,
         })];
       }
