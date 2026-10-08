@@ -77,7 +77,7 @@
       a parallel intent with a duplicate answer.
       73 tests pass, typecheck clean. Needs a live-test before this can be closed.
 
-- [ ] Fix pushed, **not yet live-tested** (round 6, 8 ต.ค. 2569, commit f04f185):
+- [x] Fix pushed + **live-tested OK on Messenger** 8 ต.ค. 2569 15:10 (round 6, commit f04f185):
       (1) "มีหนอง..." symptom msg → added `มีหนอง`/`หนองไหล` to KW.symptom and
       `MEDICAL_QUESTION` to geminiFallback's valid list (it was missing, so even a
       correct Gemini label collapsed to UNKNOWN). (2) bare age follow-up
@@ -86,6 +86,9 @@
       already routing to APPOINTMENT_CHANGE — no fix, regression test added.
 - [x] Maps link: `clinic_config.GOOGLE_MAPS` now points directly at
       maps.app.goo.gl (removed Bitly free-tier ad interstitial). Data change, no deploy.
+      Verified live 8 ต.ค. 15:13 (Messenger shows direct maps.app.goo.gl link).
+- [ ] Backlog: vaccine context across messages (remember asked vaccine + later age),
+      like symptomContext. Do only if live chats show it recurring.
 
 ## 🚧 Phase 3 — Dashboard (React)
 - [ ] Auth (Supabase)
