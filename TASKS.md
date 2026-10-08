@@ -77,6 +77,16 @@
       a parallel intent with a duplicate answer.
       73 tests pass, typecheck clean. Needs a live-test before this can be closed.
 
+- [ ] Fix pushed, **not yet live-tested** (round 6, 8 ต.ค. 2569, commit f04f185):
+      (1) "มีหนอง..." symptom msg → added `มีหนอง`/`หนองไหล` to KW.symptom and
+      `MEDICAL_QUESTION` to geminiFallback's valid list (it was missing, so even a
+      correct Gemini label collapsed to UNKNOWN). (2) bare age follow-up
+      "น้องอายุ2ขวบ2เดือนค่ะ" → vaccine gate now also triggers on resolved
+      ageMonths (reuses VACCINE_INFO no-group path). (3) reschedule 4→11→18 was
+      already routing to APPOINTMENT_CHANGE — no fix, regression test added.
+- [x] Maps link: `clinic_config.GOOGLE_MAPS` now points directly at
+      maps.app.goo.gl (removed Bitly free-tier ad interstitial). Data change, no deploy.
+
 ## 🚧 Phase 3 — Dashboard (React)
 - [ ] Auth (Supabase)
 - [ ] CRUD: vaccines, vaccine_rules, promotions, clinic_hours, closures
