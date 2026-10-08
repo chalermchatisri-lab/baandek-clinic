@@ -824,7 +824,15 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
           altText: text,
         })];
       }
-      return [{ type: "text", text }];
+      // *** แก้ 2026-10-08 — Messenger in-app browser (iPhone) บางเครื่องเปิดลิงก์
+      // Google Maps แล้วขึ้นหน้าว่าง (ลูกค้ารายงาน "เปิดไม่ได้ค่ะ"). สาเหตุคือ FB
+      // in-app browser ไม่ handoff ไปแอป Maps / ไม่ render หน้า Maps ที่ต้องพึ่ง JS
+      // เหมือน Safari จริง. ตัดสินใจ: เพิ่มคำแนะนำสำรองแทนการแก้ที่ตัวลิงก์ปลายทาง
+      // (ของเดิมยังเป็น bit.ly/baandek-map ตามเดิม ไม่แตะ — ลด complexity).
+      const openInSafariTip = maps
+        ? "\n\n💡 ถ้ากดลิงก์แล้วหน้าจอว่างเปล่า ไม่ขึ้นแผนที่ ให้กดปุ่มจุดสามจุด (•••) มุมขวาบน แล้วเลือก \"เปิดใน Safari\" ค่ะ"
+        : "";
+      return [{ type: "text", text: text + openInSafariTip }];
     }
     case "APPOINTMENT_CHECK": {
       // The "เช็คนัดหมาย" booking-menu button (and natural "เช็คนัด"/"ตรวจสอบนัด"
