@@ -356,3 +356,48 @@ describe("detectIntent — review request (2026-10-07)", () => {
     expect((await detectIntent("จองคิวค่ะ")).intent).toBe("BOOKING_MENU");
   });
 });
+
+// Round 6 — 3 verbatim FB Messenger screenshots Yai sent 2026-10-08. The third
+// screenshot (reschedule across 4th/11th/18th) turned out to already route
+// correctly on current code (its root cause — apptChange missing "ไม่สะดวก" —
+// was fixed in an earlier round), confirmed by probing before touching anything;
+// only the two below were real live bugs.
+describe("detectIntent — round 6 bug fixes (2026-10-08, FB Messenger screenshots)", () => {
+  // Symptom question with pus/discharge — no existing keyword matched "หนอง" at
+  // all, and even the Gemini fallback couldn't have rescued it (its valid-intent
+  // list didn't include MEDICAL_QUESTION, see the geminiFallback test below) —
+  // fell all the way to the generic fallback menu instead of DOCTOR_REFERRAL.
+  it("routes the pus/discharge verbatim question to MEDICAL_QUESTION", async () => {
+    const r = await detectIntent("พอดีน้องมีหนองที่อวัยวะเพศอ่ะค่ะ จะพาไปหาคุณหมอเด็กได้ไหมคะ");
+    expect(r.intent).toBe("MEDICAL_QUESTION");
+  });
+
+  // Bare age follow-up after a vaccine price question ("วัคซีนมือเท้าปากราคาเท่าไหร่ค่ะ"
+  // answered correctly, then "น้องอายุ2ขวบ2เดือนค่ะ" sent next). No conversation
+  // memory exists to tie this back to the earlier question (still out of MVP
+  // scope), but a bare age statement with nothing else matched is itself a
+  // reasonable vaccine-context signal in this bot — routes into the existing
+  // no-group VACCINE_INFO age-picker/age-reply path rather than falling through.
+  it("routes a bare age-only follow-up ('น้องอายุ2ขวบ2เดือนค่ะ') to VACCINE_INFO with ageMonths resolved", async () => {
+    const r = await detectIntent("น้องอายุ2ขวบ2เดือนค่ะ");
+    expect(r.intent).toBe("VACCINE_INFO");
+    expect(r.ageMonths).toBe(26);
+  });
+
+  // Regression: a bare age statement must not steal messages that already have
+  // a more specific intent earlier in detectIntent's priority order.
+  it("does not let the new bare-age gate steal a symptom message that happens to mention age", async () => {
+    const r = await detectIntent("ลูกอายุ 2 ขวบ ไม่สบายค่ะ");
+    expect(r.intent).toBe("MEDICAL_QUESTION");
+  });
+
+  // Confirms the third screenshot (reschedule spanning 3 dates, closed on the
+  // 11th) is NOT currently broken — already routes correctly via apptChange's
+  // "ไม่สะดวก" keyword, which predates this round's fixes.
+  it("already routes the reschedule verbatim message to APPOINTMENT_CHANGE (no fix needed)", async () => {
+    const r = await detectIntent(
+      "พอดีในนัดคุณหมอนัดฉีดวัคซีนวันที่ 4 แต่พอดีไม่สะดวกวันนั้น เลยตั้งใจจะไปวันที่ 11 แล้วพึ่งมาเห็นว่าคลินิกปิดอะค่ะ ถ้าไปวันที่ 18 ได้มั้ยคะ"
+    );
+    expect(r.intent).toBe("APPOINTMENT_CHANGE");
+  });
+});

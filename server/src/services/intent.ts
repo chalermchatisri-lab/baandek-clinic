@@ -144,6 +144,13 @@ const KW = {
     "ตุ่มใส", "มีตุ่ม",
     "เจ็บคอ", "เจ็บตา", "เจ็บหู",
     "ทำไงดี", "ทำยังไงดี", "ทำอย่างไรดี", "ควรทำยังไง", "ทำให้ดี",
+    // *** เพิ่ม 2026-10-08 (ภาพ FB Messenger, Yai ส่งมา) ***: เคสจริง "พอดีน้องมีหนองที่
+    // อวัยวะเพศอ่ะค่ะ จะพาไปหาคุณหมอเด็กได้ไหมคะ" — ไม่มี keyword ไหนในลิสต์เดิมจับคำว่า
+    // "หนอง" (มีน้ำ/สารคัดหลั่งผิดปกติ) เลย ตกไปจนถึง Gemini fallback ซึ่งไม่มี MEDICAL_QUESTION
+    // อยู่ใน valid list ด้วย (ดู geminiFallback ท้ายไฟล์ — แก้คู่กันในคอมมิตนี้) ทำให้ตอบเมนู
+    // ทั่วไปแทนคำแนะนำปรึกษาแพทย์ — ใช้ "มีหนอง" เป็น full-phrase (ไม่ใช่ bare "หนอง" เพราะ
+    // "หนอง" ชนกับชื่อจังหวัด/สถานที่ เช่น "หนองคาย"/"หนองบัวลำภู" ได้) ปลอดภัยตามสไตล์เดิม
+    "มีหนอง", "หนองไหล",
   ],
   // Non-vaccine product/supply stock questions (milk, medicine, diapers).
   // Full-phrase entries only, same reasoning as `symptom` above.
@@ -597,7 +604,16 @@ export async function detectIntent(message: string): Promise<IntentResult> {
   // isVaccineDelayQuestion ถือว่า "ฉีด" เป็นสัญญาณบริบทวัคซีนอยู่แล้ว) ทำให้ข้อความนี้ไม่เข้า
   // gate เลย ตกไป fallback ทั้งที่มีทั้งอายุ (ผ่าน parseAgeMonths ครึ่งปีที่แก้ด้านบนแล้ว) และ
   // คำว่า "ฉีด" ชัดเจน
-  if (group || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน") || text.includes("ฉีด")) {
+  //
+  // *** เพิ่ม 2026-10-08 (ภาพ FB Messenger, Yai ส่งมา) ***: เคสจริง — ถามราคาวัคซีนมือเท้าปาก
+  // (ตอบราคาไปถูกต้อง) แล้วลูกค้าพิมพ์ข้อความต่อมาแค่ "น้องอายุ2ขวบ2เดือนค่ะ" (บอกอายุเฉย ๆ
+  // ไม่มีคำว่า "วัคซีน"/"ฉีด"/ราคาเลย) — เดิม gate นี้ต้องมี group หรือคำวัคซีน/ฉีด/ราคาเสมอ
+  // ข้อความนี้ parseAgeMonths ได้อายุชัดเจน (26 เดือน) แต่หลุด gate ไปเพราะไม่มีคำพวกนั้น ตกไป
+  // fallback เมนูทั่วไปทั้งที่ควรต่อยอดเป็นคำถามวัคซีนตามอายุ (ระบบยังไม่มี conversation memory
+  // ข้ามข้อความแบบเต็มรูปแบบ — out of MVP scope ตามที่เคยตัดสินใจไว้ก่อนหน้า — แต่การบอกอายุ
+  // ลอย ๆ ในบอทคลินิกวัคซีนเด็ก ถือเป็นสัญญาณบริบทวัคซีนได้เองโดยไม่ต้อง hardcode ข้อมูลวัคซีน
+  // ใด ๆ เพิ่ม — ใช้ VACCINE_INFO's no-group+ageMonths path เดิมที่มีอยู่แล้ว ไม่ใช่ logic ใหม่)
+  if (group || ageMonths != null || KW.price.some((k) => text.includes(k)) || text.includes("วัคซีน") || text.includes("ฉีด")) {
     if (has(text, KW.price)) return { intent: "VACCINE_PRICE", text, vaccineGroup: group, ageMonths };
     if (has(text, KW.avail)) return { intent: "VACCINE_AVAILABILITY", text, vaccineGroup: group, ageMonths };
     // Falls here for "วัคซีน" + age with no specific product/price/avail word
@@ -621,10 +637,21 @@ async function geminiFallback(text: string): Promise<IntentResult> {
   try {
     const url =
       `https://generativelanguage.googleapis.com/v1beta/models/${env.geminiModel}:generateContent?key=${env.geminiKey}`;
+    // *** แก้ 2026-10-08 (ภาพ FB Messenger, Yai ส่งมา — medical safety) ***: เคสจริง "พอดีน้อง
+    // มีหนองที่อวัยวะเพศอ่ะค่ะ จะพาไปหาคุณหมอเด็กได้ไหมคะ" ไม่ match keyword ไหนเลยก่อนถึงจุดนี้
+    // (แก้คู่กันที่ KW.symptom ด้านบนแล้วสำหรับคำว่า "หนอง" โดยตรง) แต่พบว่า valid list เดิมของ
+    // Gemini fallback นี้ "ไม่มี MEDICAL_QUESTION" อยู่เลย แปลว่าต่อให้ Gemini ตอบ "MEDICAL_QUESTION"
+    // มาตรงๆ ก็จะหา match ไม่เจอใน valid.find ด้านล่าง (ไม่มีตัวไหนเป็น substring ของคำนั้น) แล้ว
+    // ตกเป็น UNKNOWN เงียบๆ อยู่ดี — เพิ่มเฉพาะ MEDICAL_QUESTION เข้าไป (ไม่ใช่ขยายทุก intent)
+    // เพราะคำตอบของ MEDICAL_QUESTION ใน reply.ts (DOCTOR_REFERRAL) ไม่ต้องใช้ field เสริมใดๆ
+    // (ต่างจาก intent อื่นที่ต้องมี vaccineGroup/ageMonths/specificDay ซึ่ง fallback นี้ไม่ได้ parse
+    // ให้) จึงปลอดภัยที่จะเพิ่มแค่ตัวนี้ก่อน ไม่เสี่ยงพังจุดอื่น — เป็นเรื่องความปลอดภัยทางการแพทย์
+    // โดยตรง (คำถามอาการป่วยต้องไม่ตกไปตอบเมนูทั่วไปเด็ดขาด)
     const prompt =
       `จำแนก intent ของข้อความคลินิกเด็กนี้เป็นหนึ่งใน: ` +
       `APPOINTMENT_CHANGE, CLINIC_STATUS, CLINIC_TIME, LOCATION, VACCINE_PRICE, ` +
-      `VACCINE_AVAILABILITY, VACCINE_INFO, UNKNOWN. ตอบเป็นคำเดียว.\nข้อความ: "${text}"`;
+      `VACCINE_AVAILABILITY, VACCINE_INFO, MEDICAL_QUESTION (ถามอาการป่วย/ปัญหาสุขภาพของเด็ก), ` +
+      `UNKNOWN. ตอบเป็นคำเดียว.\nข้อความ: "${text}"`;
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -635,7 +662,7 @@ async function geminiFallback(text: string): Promise<IntentResult> {
       .trim().toUpperCase();
     const valid: Intent[] = [
       "APPOINTMENT_CHANGE", "CLINIC_STATUS", "CLINIC_TIME", "LOCATION",
-      "VACCINE_PRICE", "VACCINE_AVAILABILITY", "VACCINE_INFO", "UNKNOWN",
+      "VACCINE_PRICE", "VACCINE_AVAILABILITY", "VACCINE_INFO", "MEDICAL_QUESTION", "UNKNOWN",
     ];
     const intent = (valid.find((v) => label.includes(v)) ?? "UNKNOWN") as Intent;
     return { intent, text };
