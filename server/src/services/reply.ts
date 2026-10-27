@@ -3,7 +3,8 @@ import { env } from "../lib/env";
 import { detectIntent } from "./intent";
 import { buildVaccineAdvice, DOCTOR_REFERRAL, buildAgeGroupVaccineList, buildAgeCardFlex, BRAND_GREEN, BRAND_GREEN_DARK, BRAND_CREAM, TEXT_DARK, TEXT_MUTED } from "./vaccine";
 import { getClinicStatus } from "./clinicStatus";
-import { buildAppointmentResultByPhone } from "./appointmentCheck";
+import { buildAppointmentResultByPhone, thaiDate as apptThaiDate } from "./appointmentCheck";
+import { buildCalendarFlex } from "./calendar";
 import { findSpecificStockMatches, getPriorityStockOverview, buildSpecificStockReply, buildOverviewStockReply } from "./stock";
 import { markSymptomContext, hasSymptomContext, clearSymptomContext } from "../lib/symptomContext";
 
@@ -554,6 +555,11 @@ export async function buildReplyMessages(text: string, channel: Channel, userId?
       return [{ type: "text", text: await buildIncompletePhoneMessage() }];
     }
     const r = await buildAppointmentResultByPhone(text);
+    // 2026-10-27: + การ์ด "📅 เพิ่มลงปฏิทินมือถือ" (Reply = ฟรี ไม่ใช้โควต้า Push) ให้มือถือ
+    // ผู้ปกครองเตือนนัดเอง — ถึงตรงนี้ได้เฉพาะ LINE (Messenger ถูก redirect ไปแล้วด้านบน)
+    if (r.found && r.appointments.length > 0) {
+      return [{ type: "text", text: r.text }, buildCalendarFlex(r.appointments, apptThaiDate)];
+    }
     return [{ type: "text", text: r.text }];
   }
 

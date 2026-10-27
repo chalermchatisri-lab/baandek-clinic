@@ -53,6 +53,9 @@ const appointmentCheck = await import("./appointmentCheck");
 vi.spyOn(appointmentCheck, "buildAppointmentResultByPhone").mockResolvedValue({
   found: true,
   text: "นัดหมายที่กำลังจะถึงของคุณ เฉอลินน์ ค่ะ\n\n📅 20 ก.ย. 2569 เวลา 10:00\n   วัคซีน",
+  appointments: [
+    { id: "11111111-2222-3333-4444-555555555555", date: "2026-09-20", timeSlot: "9.00-10.00 น.", purpose: "วัคซีน", nickname: "เฉอลินน์" },
+  ],
 });
 
 const { buildReplyMessages } = await import("./reply");
@@ -75,6 +78,10 @@ describe("buildReplyMessages — PDPA: real appointment data must never reach Me
     expect(appointmentCheck.buildAppointmentResultByPhone).toHaveBeenCalledWith("0918239450");
     const combined = msgs.map((m) => (m.type === "text" ? m.text : "")).join("\n");
     expect(combined).toContain("เฉอลินน์");
+    // + 📅 add-to-calendar card (free Reply, no Push quota)
+    const flex = msgs.find((m) => m.type === "flex");
+    expect(flex?.altText).toContain("ปฏิทิน");
+    expect(JSON.stringify(flex)).toContain("/public/appointment-ics/11111111-2222-3333-4444-555555555555");
   });
 
   it("redirects to LINE OA for the 'เช็คนัดหมาย' menu button on messenger instead of prompting for a phone number", async () => {

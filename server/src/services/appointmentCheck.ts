@@ -1,4 +1,5 @@
 import { admin } from "../lib/supabase";
+import type { CalendarAppt } from "./calendar";
 
 /**
  * Look up a patient's upcoming appointments by phone number.
@@ -18,12 +19,22 @@ export function normalizePhone(raw: string): string | null {
 export interface ApptResult {
   found: boolean;
   text: string;
+  /** For the "📅 add to phone calendar" card (LINE only). Empty when not found. */
+  appointments: CalendarAppt[];
 }
+
+type ApptRow = {
+  id: string;
+  appt_date: string;
+  time_slot: string | null;
+  purpose_raw: string | null;
+  patients: { full_name: string | null; nickname: string | null } | null;
+};
 
 export async function buildAppointmentResultByPhone(rawPhone: string): Promise<ApptResult> {
   const phone = normalizePhone(rawPhone);
   if (!phone) {
-    return { found: false, text: "กรุณาพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) อีกครั้งค่ะ" };
+    return { found: false, text: "กรุณาพิมพ์เบอร์โทรที่ลงทะเบียนไว้ (10 หลัก) อีกครั้งค่ะ", appointments: [] };
   }
 
   const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
@@ -31,7 +42,7 @@ export async function buildAppointmentResultByPhone(rawPhone: string): Promise<A
   // patient(s) with this phone -> their future appointments
   const { data, error } = await admin
     .from("appointments")
-    .select("appt_date, time_slot, purpose_raw, patients!inner(full_name, nickname, phone)")
+    .select("id, appt_date, time_slot, purpose_raw, patients!inner(full_name, nickname, phone)")
     .eq("patients.phone", phone)
     .gte("appt_date", today)
     .order("appt_date", { ascending: true })
@@ -43,18 +54,27 @@ export async function buildAppointmentResultByPhone(rawPhone: string): Promise<A
       text:
         "ไม่พบนัดหมายที่กำลังจะถึงสำหรับเบอร์นี้ค่ะ\n" +
         "หากต้องการความช่วยเหลือ กรุณาติดต่อคลินิกโดยตรงนะคะ",
+      appointments: [],
     };
   }
 
   const name = (data[0] as any).patients?.nickname || (data[0] as any).patients?.full_name || "";
   const lines = data.map((a: any) => `📅 ${thaiDate(a.appt_date)} เวลา ${a.time_slot}\n   ${a.purpose_raw}`);
+  const rows = data as unknown as ApptRow[];
   return {
     found: true,
     text: `นัดหมายที่กำลังจะถึงของคุณ ${name} ค่ะ\n\n${lines.join("\n\n")}`,
+    appointments: rows.map((a) => ({
+      id: a.id,
+      date: a.appt_date,
+      timeSlot: a.time_slot ?? "",
+      purpose: a.purpose_raw ?? "",
+      nickname: a.patients?.nickname || "",
+    })),
   };
 }
 
-function thaiDate(iso: string): string {
+export function thaiDate(iso: string): string {
   const [y, m, d] = iso.split("-").map(Number);
   const months = ["ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
                   "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."];

@@ -63,7 +63,12 @@ git push
 ### server/src/services/lineInsight.ts
 - `getRichMenuStats(from, to)` — read-only: rich menu impressions + clicks per button
   (Messaging API rich menus don't show in OA Manager) + monthly push quota/usage
+### server/src/services/calendar.ts
+- `buildCalendarFlex(appts)` — "📅 เพิ่มลงปฏิทินมือถือ" card appended to LINE phone-lookup
+  replies (free Reply, no Push quota); `buildIcs()` (reminders −2d/−1d), `googleCalendarUrl()`
 ### server/src/routes/
+- `public.ts` — GET /public/appointment-ics/:id (iPhone .ics) + /public/appointment-gcal/:id
+  (302 → Google Calendar; exists because LINE caps URIs at 1000 chars). UUID-only, future appts only
 - `internal.ts` — GET /internal/richmenu-insight (manual via `.github/workflows/richmenu-insight.yml`)
 - `line.ts` — POST /webhook/line
 - `messenger.ts` — GET+POST /webhook/messenger

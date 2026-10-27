@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { admin } from "../lib/supabase";
 import { getClinicStatus } from "../services/clinicStatus";
+import { buildIcs, googleCalendarUrl, type CalendarAppt } from "../services/calendar";
 
 export const publicApi = new Hono();
 
@@ -452,4 +453,59 @@ publicApi.get("/public/vaccine-advisor-status", async (c) => {
   }
 
   return c.json({ ok: true, generatedAt: new Date().toISOString(), message: msg });
+});
+
+// ---- GET /public/appointment-ics/:id ----
+// iPhone half of the "📅 เพิ่มลงปฏิทินมือถือ" card (see services/calendar.ts).
+// The id is the appointment's UUID (unguessable) — the link only ever goes to
+// the parent who looked the appointment up by phone on LINE. Returns only the
+// child's nickname, date/time and purpose; only for today-or-future dates.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+type IcsRow = {
+  id: string;
+  appt_date: string;
+  time_slot: string | null;
+  purpose_raw: string | null;
+  patients: { nickname: string | null } | null;
+};
+async function loadCalendarAppt(id: string): Promise<CalendarAppt | null> {
+  if (!UUID_RE.test(id)) return null;
+  const today = new Date(Date.now() + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const { data, error } = await admin
+    .from("appointments")
+    .select("id, appt_date, time_slot, purpose_raw, patients(nickname)")
+    .eq("id", id)
+    .gte("appt_date", today)
+    .maybeSingle();
+  if (error || !data) return null;
+  const row = data as unknown as IcsRow;
+  return {
+    id: row.id,
+    date: row.appt_date,
+    timeSlot: row.time_slot ?? "",
+    purpose: row.purpose_raw ?? "",
+    nickname: row.patients?.nickname ?? "",
+  };
+}
+
+const NOT_FOUND_TEXT = "ไม่พบนัดหมายนี้ หรือเลยวันนัดแล้วค่ะ";
+
+publicApi.get("/public/appointment-ics/:id", async (c) => {
+  const appt = await loadCalendarAppt(c.req.param("id"));
+  if (!appt) return c.text(NOT_FOUND_TEXT, 404);
+  return c.body(buildIcs(appt), 200, {
+    "content-type": "text/calendar; charset=utf-8",
+    "content-disposition": 'inline; filename="baandek-appointment.ics"',
+    "cache-control": "no-store",
+  });
+});
+
+// ---- GET /public/appointment-gcal/:id ----
+// Android/Google half of the same card: 302 to a Google Calendar "add event"
+// template. Exists only because the full Google URL exceeds LINE's 1000-char URI cap.
+publicApi.get("/public/appointment-gcal/:id", async (c) => {
+  const appt = await loadCalendarAppt(c.req.param("id"));
+  if (!appt) return c.text(NOT_FOUND_TEXT, 404);
+  c.header("cache-control", "no-store");
+  return c.redirect(googleCalendarUrl(appt), 302);
 });
