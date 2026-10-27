@@ -9,6 +9,7 @@ import {
   buildEmergencyExpiryMessage,
 } from "../services/stock";
 import { publishPendingPosts } from "../services/facebook";
+import { getRichMenuStats, isYyyyMmDd, todayUtc9 } from "../services/lineInsight";
 
 // Internal, non-public routes — called by scheduled infrastructure (GitHub
 // Actions cron), never by a browser or LINE. Guarded by a shared secret
@@ -57,6 +58,29 @@ internalApi.post("/internal/stock-alert-run", async (c) => {
 
   const sent = await pushMessage(userId, [{ type: "text", text }]);
   return c.json({ ok: sent, sent });
+});
+
+// ---- GET /internal/richmenu-insight?from=yyyyMMdd&to=yyyyMMdd ----
+// Read-only: rich menu impressions + clicks per button, and this month's LINE
+// push quota. Our rich menu is created via the Messaging API, so LINE OA
+// Manager can't show its stats. Called manually via
+// .github/workflows/richmenu-insight.yml (workflow_dispatch). Default period:
+// LINE cutover to the Render backend (2026-08-30) → today. Aggregate counts
+// only — no user IDs.
+internalApi.get("/internal/richmenu-insight", async (c) => {
+  const from = c.req.query("from") ?? "20260830";
+  const to = c.req.query("to") ?? todayUtc9();
+  if (!isYyyyMmDd(from) || !isYyyyMmDd(to)) {
+    return c.json({ ok: false, error: "from/to must be yyyyMMdd" }, 400);
+  }
+  try {
+    const result = await getRichMenuStats(from, to);
+    return c.json(result, result.ok ? 200 : 502);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("richmenu-insight failed:", message);
+    return c.json({ ok: false, error: message }, 500);
+  }
 });
 
 // ---- POST /internal/facebook-post-run ----

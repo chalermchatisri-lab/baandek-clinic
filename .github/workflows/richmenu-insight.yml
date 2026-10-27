@@ -1,0 +1,43 @@
+# .github/workflows/richmenu-insight.yml
+#
+# Manual only (Actions tab → "Rich menu insight" → Run workflow).
+# Asks the Render backend for read-only LINE stats: rich menu impressions,
+# clicks per button, and this month's push-message quota. Our rich menu is
+# created via the Messaging API, so LINE OA Manager can't show these numbers.
+# Output is aggregate counts only — no user IDs.
+
+name: Rich menu insight
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: "Start date yyyyMMdd (blank = 20260830, LINE cutover)"
+        required: false
+        default: ""
+      to:
+        description: "End date yyyyMMdd (blank = today)"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: GET /internal/richmenu-insight
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: |
+          QS=""
+          [ -n "$FROM" ] && QS="from=$FROM"
+          [ -n "$TO" ] && QS="${QS:+$QS&}to=$TO"
+          STATUS=$(curl -s -o response.json -w "%{http_code}" \
+            -H "x-internal-token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            "https://baandek-clinic.onrender.com/internal/richmenu-insight${QS:+?$QS}")
+          echo "HTTP $STATUS"
+          jq . response.json || cat response.json
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::richmenu-insight failed with status $STATUS"
+            exit 1
+          fi

@@ -60,7 +60,11 @@ git push
 ### server/src/lib/humanHandoff.ts
 - `markHumanHandling(channel, userId)` / `isHumanHandling(channel, userId)` — 30-min mute
   when Messenger `message_echoes` shows a staff member typing via Page Inbox (no app_id)
+### server/src/services/lineInsight.ts
+- `getRichMenuStats(from, to)` — read-only: rich menu impressions + clicks per button
+  (Messaging API rich menus don't show in OA Manager) + monthly push quota/usage
 ### server/src/routes/
+- `internal.ts` — GET /internal/richmenu-insight (manual via `.github/workflows/richmenu-insight.yml`)
 - `line.ts` — POST /webhook/line
 - `messenger.ts` — GET+POST /webhook/messenger
 - `health.ts` — GET /health
