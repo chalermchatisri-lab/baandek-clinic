@@ -8,6 +8,9 @@ export interface SocialPostRow {
   id: string;
   message: string;
   image_url: string | null;
+  // 2+ images in one post (album-style). Takes precedence over image_url.
+  // Nullable/optional so rows and DBs from before this column still work.
+  image_urls?: string[] | null;
   link_url: string | null;
   video_url: string | null;
   status: "pending" | "posted" | "failed";
@@ -175,12 +178,54 @@ async function postVideoReelToFacebook(post: SocialPostRow): Promise<string> {
   return videoId;
 }
 
-// Uses /video_reels when a video_url is present, /photos when an image_url
-// is present (caption = message), otherwise /feed with the message and an
-// optional link attachment.
+// Multi-photo post: upload each image unpublished (/photos published=false),
+// then create one /feed post that attaches them all via attached_media.
+// Meta's documented flow for a single post with several photos.
+export function buildMultiPhotoFeedParams(
+  accessToken: string,
+  message: string,
+  mediaIds: string[],
+): URLSearchParams {
+  const body = new URLSearchParams({ access_token: accessToken, message });
+  mediaIds.forEach((id, i) => body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: id })));
+  return body;
+}
+
+async function postMultiPhotoToFacebook(post: SocialPostRow, imageUrls: string[]): Promise<string> {
+  const { pageId, accessToken } = getFacebookEnv();
+  const mediaIds: string[] = [];
+  for (const url of imageUrls) {
+    const photo = await graphRequest(
+      `${GRAPH_API_BASE}/${pageId}/photos`,
+      new URLSearchParams({ access_token: accessToken, url, published: "false" }),
+    );
+    const id = photo.id as string | undefined;
+    if (!id) throw new Error(`Facebook returned no photo id for ${url}`);
+    mediaIds.push(id);
+  }
+  const json = await graphRequest(
+    `${GRAPH_API_BASE}/${pageId}/feed`,
+    buildMultiPhotoFeedParams(accessToken, post.message, mediaIds),
+  );
+  const fbPostId = json.id as string | undefined;
+  if (!fbPostId) throw new Error("Facebook API returned no post id for multi-photo post");
+  return fbPostId;
+}
+
+// Uses /video_reels when a video_url is present, a multi-photo /feed post
+// when image_urls has 2+ entries, /photos when an image is present
+// (caption = message), otherwise /feed with the message and an optional link.
 async function postToFacebook(post: SocialPostRow): Promise<string> {
   if (post.video_url) {
     return postVideoReelToFacebook(post);
+  }
+
+  const urls = (post.image_urls ?? []).filter((u) => typeof u === "string" && u.length > 0);
+  if (urls.length >= 2) {
+    return postMultiPhotoToFacebook(post, urls);
+  }
+  if (urls.length === 1 && !post.image_url) {
+    post = { ...post, image_url: urls[0]! };
   }
 
   const { pageId, accessToken } = getFacebookEnv();

@@ -66,6 +66,11 @@ git push
 ### server/src/services/calendar.ts
 - `buildCalendarFlex(appts)` — "📅 เพิ่มลงปฏิทินมือถือ" card appended to LINE phone-lookup
   replies (free Reply, no Push quota); `buildIcs()` (reminders −2d/−1d), `googleCalendarUrl()`
+### server/src/services/facebook.ts
+- `publishPendingPosts()` — `social_posts` queue → FB. `image_urls` (2+) = one multi-photo post
+  (photos uploaded unpublished, then /feed with attached_media); `image_url` = single photo
+### assets/social/
+- Public images for FB posts, served via raw.githubusercontent.com (repo is public)
 ### server/src/routes/
 - `public.ts` — GET /public/appointment-ics/:id (iPhone .ics) + /public/appointment-gcal/:id
   (302 → Google Calendar; exists because LINE caps URIs at 1000 chars). UUID-only, future appts only
